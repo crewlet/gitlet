@@ -174,7 +174,7 @@ func (b *builder) Add(d Def) model.Symbol {
 		Kind:      d.Kind,
 		Signature: d.Signature,
 		SigHash:   SigHash(d.Kind + "\x00" + d.Signature),
-		BodyHash:  BodyHash(b.bodyTokens(d.Node, d.Nested)),
+		BodyHash:  BodyHash(b.bodyTokens(d.Node, d.Nested, d.Name)),
 		Params:    d.Params,
 		Results:   d.Results,
 		Members:   d.Members,
@@ -243,7 +243,13 @@ func (b *builder) NormSkip(n *sitter.Node, skip func(*sitter.Node) bool) string 
 	return sb.String()
 }
 
-func (b *builder) bodyTokens(n *sitter.Node, nested []*sitter.Node) string {
+// bodyTokens returns the tokens the body hash covers. Nested definitions
+// become a placeholder, the first occurrence of the definition's own name is
+// left out (so a renamed symbol keeps its body hash and can be paired), and
+// tokens that formatters add or remove without changing meaning are dropped:
+// statement semicolons in Go, TypeScript and JavaScript, and a comma right
+// before a closing bracket.
+func (b *builder) bodyTokens(n *sitter.Node, nested []*sitter.Node, name string) string {
 	type span struct{ start, end uint }
 	skip := make(map[span]bool, len(nested))
 	for _, x := range nested {
@@ -252,22 +258,53 @@ func (b *builder) bodyTokens(n *sitter.Node, nested []*sitter.Node) string {
 			skip[span{s, e}] = true
 		}
 	}
-	var sb strings.Builder
+	var toks []string
 	b.leaves(n, func(c *sitter.Node) bool {
 		if len(skip) == 0 || c.Id() == n.Id() {
 			return false
 		}
 		s, e := c.ByteRange()
 		if skip[span{s, e}] {
-			sb.WriteString("\x01 ")
+			toks = append(toks, "\x01")
 			return true
 		}
 		return false
-	}, func(tok string) {
+	}, func(tok string) { toks = append(toks, tok) })
+
+	dropSemicolons := optionalSemicolons(b.lang)
+	var sb strings.Builder
+	for i, tok := range toks {
+		switch {
+		case name != "" && tok == name:
+			name = ""
+			continue
+		case tok == ";" && dropSemicolons:
+			continue
+		case tok == "," && i+1 < len(toks) && isClosing(toks[i+1]):
+			continue
+		}
 		sb.WriteString(tok)
 		sb.WriteByte(' ')
-	})
+	}
 	return sb.String()
+}
+
+// optionalSemicolons reports whether formatters insert or remove statement
+// semicolons freely in lang (gofmt, and ASI in JavaScript and TypeScript).
+func optionalSemicolons(lang string) bool {
+	switch lang {
+	case "go", "typescript", "tsx", "javascript":
+		return true
+	}
+	return false
+}
+
+func isClosing(tok string) bool {
+	switch tok {
+	case ")", "]", "}", ">":
+		return true
+	}
+	return false
 }
 
 // leaves calls emit for every leaf token under n in source order, dropping

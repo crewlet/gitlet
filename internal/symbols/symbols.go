@@ -3,7 +3,7 @@
 // TypeScript, TSX, JavaScript, Python and Rust; other files are reported as
 // unsupported and tracked at file level by callers.
 //
-// Each language lives in its own file (lang_go.go, lang_ts.go, lang_python.go,
+// Each language lives in its own file (lang_go.go, lang_typescript.go, lang_python.go,
 // lang_rust.go) and implements one extract function on top of the builder in
 // extract.go, which owns keys, unique names, hashing and ordering.
 package symbols

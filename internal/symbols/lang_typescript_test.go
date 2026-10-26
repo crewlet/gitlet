@@ -751,6 +751,7 @@ export async function load(
 { /* read it */ return read( path , strict ) ; }`,
 			qualified: "load",
 			sameSig:   true,
+			sameBody:  true, // a trailing comma and semicolons are formatting
 		},
 		{
 			name: "whitespace and comments only",
