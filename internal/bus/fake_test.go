@@ -130,6 +130,9 @@ type fakeRemote struct {
 	// beforePush runs before each push is applied, outside the lock, to
 	// stage races.
 	beforePush func(opt gitx.PushOptions)
+	// listHangs makes LsRemoteHeads wait for its context, like a remote
+	// slower than the caller's budget.
+	listHangs bool
 }
 
 func (r *fakeRemote) get(ref string) string {
@@ -507,14 +510,20 @@ func (r *fakeRepo) Push(ctx context.Context, opt gitx.PushOptions) (gitx.PushRep
 	return rep, nil
 }
 
-// LsRemote lists the fake remote's refs under the patterns, which end in
-// "*" or name a ref.
-func (r *fakeRepo) LsRemote(ctx context.Context, remote string, patterns ...string) (map[string]string, error) {
+// LsRemoteHeads lists the fake remote's branches.
+func (r *fakeRepo) LsRemoteHeads(ctx context.Context, remote string) (map[string]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if r.remote == nil {
 		return nil, &gitx.Error{Args: []string{"ls-remote", remote}, ExitCode: 128, Stderr: "fatal: '" + remote + "' does not appear to be a git repository"}
+	}
+	r.remote.mu.Lock()
+	hangs := r.remote.listHangs
+	r.remote.mu.Unlock()
+	if hangs {
+		<-ctx.Done()
+		return nil, &gitx.Error{Args: []string{"ls-remote", remote}, ExitCode: -1, Stderr: ctx.Err().Error()}
 	}
 	r.remote.mu.Lock()
 	defer r.remote.mu.Unlock()
@@ -523,10 +532,8 @@ func (r *fakeRepo) LsRemote(ctx context.Context, remote string, patterns ...stri
 	}
 	out := map[string]string{}
 	for name, oid := range r.remote.refs {
-		for _, p := range patterns {
-			if prefix, glob := strings.CutSuffix(p, "*"); glob && strings.HasPrefix(name, prefix) || name == p {
-				out[name] = oid
-			}
+		if strings.HasPrefix(name, "refs/heads/") {
+			out[name] = oid
 		}
 	}
 	return out, nil

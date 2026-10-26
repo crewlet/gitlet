@@ -67,16 +67,22 @@ func (r *Repo) listRefsByDate(ctx context.Context, prefix string, max int) ([]Re
 	return list, nil
 }
 
-func (r *Repo) lsRemote(ctx context.Context, remote string, patterns ...string) (map[string]string, error) {
+func (r *Repo) lsRemote(ctx context.Context, remote string, heads bool, patterns ...string) (map[string]string, error) {
 	if err := checkRemote(remote); err != nil {
 		return nil, err
+	}
+	args := []string{"ls-remote"}
+	if heads {
+		// Sent to the server as a ref prefix, unlike patterns, which
+		// filter what it lists.
+		args = append(args, "--heads")
 	}
 	for _, p := range patterns {
 		if err := checkName("ref pattern", p); err != nil {
 			return nil, err
 		}
 	}
-	args := append([]string{"ls-remote", remote}, patterns...)
+	args = append(append(args, remote), patterns...)
 	out, err := r.exec(ctx, cmdOpts{timeout: timeoutFetch}, args...)
 	if err != nil {
 		return nil, err

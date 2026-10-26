@@ -183,9 +183,13 @@ func (b *Bus) checkUnpushed(ctx context.Context, ref, commit string) error {
 	}
 	// A push does not always leave a remote-tracking ref behind (a
 	// single-branch or shallow clone fetches one branch), so before
-	// refusing, ask the remote which branch heads it has. Unreachable, the
-	// refusal stands.
-	if heads, err := b.repo.LsRemote(ctx, b.remoteName, "refs/heads/*"); err == nil && len(heads) > 0 {
+	// refusing, ask the remote which branch heads it has. When the remote
+	// does not answer the refusal stands, but when the caller's time ran
+	// out first the question is left for the next snapshot.
+	switch heads, err := b.repo.LsRemoteHeads(ctx, b.remoteName); {
+	case err != nil && ctx.Err() != nil:
+		return fmt.Errorf("list the remote's branches: %w", errors.Join(err, ctx.Err()))
+	case err == nil && len(heads) > 0:
 		for _, oid := range heads {
 			published = append(published, oid)
 		}

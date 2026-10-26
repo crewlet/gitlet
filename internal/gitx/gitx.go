@@ -369,7 +369,14 @@ func (r *Repo) ListRefsByDate(ctx context.Context, prefix string, max int) ([]Re
 
 // LsRemote returns ref name to object id on a remote for the given patterns.
 func (r *Repo) LsRemote(ctx context.Context, remote string, patterns ...string) (map[string]string, error) {
-	return r.lsRemote(ctx, remote, patterns...)
+	return r.lsRemote(ctx, remote, false, patterns...)
+}
+
+// LsRemoteHeads returns the remote's branches (refs/heads/*) by name. It
+// asks the server for branches only, which matters on hosts with many
+// other refs, such as one per pull request.
+func (r *Repo) LsRemoteHeads(ctx context.Context, remote string) (map[string]string, error) {
+	return r.lsRemote(ctx, remote, true)
 }
 
 // FetchOptions controls Fetch.

@@ -277,6 +277,13 @@ func TestLsRemoteAndFetch(t *testing.T) {
 	if refs, _ := b.repo.LsRemote(bg, "origin", "v1"); len(refs) != 1 {
 		t.Fatalf("LsRemote(v1) = %v, want the tag without its peeled line", refs)
 	}
+	heads, err := b.repo.LsRemoteHeads(bg, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := a.git("rev-parse", "refs/heads/main"); len(heads) != 1 || heads["refs/heads/main"] != want {
+		t.Fatalf("LsRemoteHeads = %v, want only main at %s", heads, want)
+	}
 
 	// Main goes to gitlet's own ref; the user's remote-tracking ref and tags
 	// are left alone.

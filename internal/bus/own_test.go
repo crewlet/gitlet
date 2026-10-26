@@ -323,8 +323,24 @@ func TestWriteWipRefusesUnpushedExcludedFiles(t *testing.T) {
 		t.Fatalf("WriteWip with the commits only in an outside branch copy: %v, want a RejectedError", err)
 	}
 
-	// Once those commits are on the remote, the snapshot is pushed.
-	repo.setRef("refs/remotes/origin/feature", big)
+	// When the remote's branches cannot be listed within the caller's time,
+	// the snapshot is neither refused nor written: the next one asks again.
+	e.remote.set("refs/heads/feature", big)
+	e.remote.mu.Lock()
+	e.remote.listHangs = true
+	e.remote.mu.Unlock()
+	short, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	err = b.WriteWip(short, itemA, snap)
+	cancel()
+	if errors.As(err, &rej) || !errors.Is(err, context.DeadlineExceeded) || repo.ref(WipRef(agentA, itemA)) != "" {
+		t.Fatalf("WriteWip out of time: %v, want the deadline and nothing written", err)
+	}
+	e.remote.mu.Lock()
+	e.remote.listHangs = false
+	e.remote.mu.Unlock()
+
+	// A branch the remote has counts although this clone does not track it
+	// (a single-branch clone pushed it), so the snapshot is pushed.
 	mustNoErr(t, b.WriteWip(ctx, itemA, snap))
 	if e.remote.get(WipRef(agentA, itemA)) != snap {
 		t.Fatal("snapshot not pushed")
