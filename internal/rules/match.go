@@ -20,10 +20,19 @@ import (
 // root (a source root in a subdirectory, a GOPATH-style tree). An
 // unresolved ref (its qualifier is a variable, receiver, self or this)
 // matches a member (method, field) by name only, when that name is unique.
-// In Go the symbol must be exported unless the ref is in its package.
+// In Go the symbol must be exported unless the ref is in its package. A
+// resolved ref that builds an instance of a class also matches the class's
+// constructor (constructed).
 // Qualifiers and modules arrive resolved by the footprint package; nothing
 // here resolves them again.
 func matchRef(ref model.Ref, sym model.Symbol, uniqueMethod bool) (match, resolved bool) {
+	if ref.Name != sym.Name {
+		class, ok := constructed(ref, sym)
+		if !ok {
+			return false, false
+		}
+		sym = class
+	}
 	if ref.Name == "" || ref.Name != sym.Name {
 		return false, false
 	}
@@ -71,6 +80,37 @@ func typeMember(s model.Symbol) bool {
 // lastSegment returns the last dot-separated segment of a container.
 func lastSegment(container string) string {
 	return container[strings.LastIndexByte(container, '.')+1:]
+}
+
+// constructed returns the class that a constructor symbol (a JavaScript
+// constructor, a Python __init__) belongs to, as a symbol of its own, when
+// ref may build an instance of a class: a resolved `new X` in JavaScript, a
+// resolved call in Python. Such a ref names the class, while a change to the
+// constructor's parameters lands on the constructor's own symbol, so the
+// match is made against the class's name, container and module instead.
+func constructed(ref model.Ref, sym model.Symbol) (model.Symbol, bool) {
+	if !ref.Resolved || sym.Kind != "method" || sym.Container == "" {
+		return model.Symbol{}, false
+	}
+	switch model.LangFamily(sym.Lang) {
+	case "js":
+		if sym.Name != "constructor" || ref.Kind != model.RefConstruct {
+			return model.Symbol{}, false
+		}
+	case "python":
+		if sym.Name != "__init__" || ref.Kind != model.RefCall {
+			return model.Symbol{}, false
+		}
+	default:
+		return model.Symbol{}, false
+	}
+	class := sym
+	class.Kind = "class"
+	class.Container, class.Name = "", sym.Container
+	if i := strings.LastIndexByte(sym.Container, '.'); i >= 0 {
+		class.Container, class.Name = sym.Container[:i], sym.Container[i+1:]
+	}
+	return class, true
 }
 
 // member reports whether a symbol lives inside a type: a method or field.

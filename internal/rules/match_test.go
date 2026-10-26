@@ -28,6 +28,14 @@ func TestMatch(t *testing.T) {
 	rsInline.Kind = "function" // in the inline module retry
 	rsAssoc := fn("rust", "src/parser.rs", "Parser.MAX", "pub const Parser::MAX: usize")
 	rsAssoc.Kind = "const"
+	tsCtor := fn("typescript", "src/config.ts", "Config.constructor", "constructor(string)")
+	nsCtor := fn("typescript", "src/config.ts", "conf.Config.constructor", "constructor(string)")
+	pyCtor := fn("python", "pkg/config.py", "Config.__init__", "def __init__(self, path)")
+	pyNestedInit := fn("python", "pkg/models.py", "User.Meta.__init__", "def __init__(self)")
+	construct := func(r model.Ref) model.Ref {
+		r.Kind = model.RefConstruct
+		return r
+	}
 	typed := func(r model.Ref, qualifier, container string) model.Ref {
 		r.Qualifier, r.Container = qualifier, container
 		return r
@@ -92,6 +100,23 @@ func TestMatch(t *testing.T) {
 		{"rust associated const through its type", typed(ref("MAX", "rust", "src/main.rs", 1, "src/parser"), "Parser", "Parser"), rsAssoc, false, true, true},
 		{"rust lib stands for its directory", ref("run", "rust", "crates/cli/src/main.rs", 1, "crates/core/src"), rsLib, false, true, true},
 		{"empty module", model.Ref{Name: "parseConfig", Lang: "typescript", Path: "a.ts", Resolved: true}, tsFn, false, false, false},
+		{"ts new reaches the constructor", construct(ref("Config", "typescript", "src/app.ts", 1, "src/config")), tsCtor, false, true, true},
+		{"javascript new reaches a ts constructor", construct(ref("Config", "javascript", "src/app.js", 1, "src/config")), tsCtor, false, true, true},
+		{"ts new through a namespace import", construct(typed(ref("Config", "typescript", "src/app.ts", 1, "src/config"), "cfg", "")), tsCtor, false, true, true},
+		{"ts new of another class", construct(ref("Store", "typescript", "src/app.ts", 1, "src/config")), tsCtor, false, false, false},
+		{"ts new in another module", construct(ref("Config", "typescript", "src/app.ts", 1, "src/other")), tsCtor, false, false, false},
+		{"ts call of the class does not reach the constructor", ref("Config", "typescript", "src/app.ts", 1, "src/config"), tsCtor, false, false, false},
+		{"ts unresolved new does not reach the constructor", model.Ref{Name: "Config", Qualifier: "this.types", Kind: model.RefConstruct, Lang: "typescript", Path: "src/app.ts"}, tsCtor, true, false, false},
+		{"ts new of a class in a namespace", construct(ref("Config", "typescript", "src/config.ts", 1, "src/config")), nsCtor, false, true, true},
+		{"python call of the class reaches __init__", ref("Config", "python", "pkg/app.py", 1, "pkg/config"), pyCtor, false, true, true},
+		{"python call through a module", typed(ref("Config", "python", "pkg/app.py", 1, "pkg/config"), "config", ""), pyCtor, false, true, true},
+		{"python call through a class does not reach __init__", typed(ref("Config", "python", "pkg/app.py", 1, "pkg/config"), "Base", "Base"), pyCtor, false, false, false},
+		{"python explicit __init__ call", typed(ref("__init__", "python", "pkg/app.py", 1, "pkg/config"), "Config", "Config"), pyCtor, false, true, true},
+		{"python call of another class", ref("Settings", "python", "pkg/app.py", 1, "pkg/config"), pyCtor, false, false, false},
+		{"python type annotation does not reach __init__", model.Ref{Name: "Config", Kind: model.RefType, Lang: "python", Path: "pkg/app.py", Module: "pkg/config", Resolved: true}, pyCtor, false, false, false},
+		{"python nested class constructed through its class", typed(ref("Meta", "python", "pkg/app.py", 1, "pkg/models"), "User", "User"), pyNestedInit, false, true, true},
+		{"python nested class constructed without its class", ref("Meta", "python", "pkg/app.py", 1, "pkg/models"), pyNestedInit, false, false, false},
+		{"rust new is not a constructor", typed(ref("Parser", "rust", "src/main.rs", 1, "src/parser"), "", ""), rsMethod, false, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

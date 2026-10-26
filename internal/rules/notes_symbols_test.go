@@ -17,6 +17,11 @@ var (
 
 	loadM     = fn("typescript", "src/config.ts", "Config.load", "load(string): void")
 	callLoadM = methodRef("load", "cfg", "typescript", "src/app.ts", 30)
+
+	tsCtor    = fn("typescript", "src/config.ts", "Config.constructor", "constructor(string)")
+	newCfg    = model.Ref{Name: "Config", Kind: model.RefConstruct, Lang: "typescript", Path: "src/app.ts", Line: 40, Module: "src/config", Resolved: true}
+	pyInit    = fn("python", "pkg/config.py", "Config.__init__", "def __init__(self, path)")
+	callPyCfg = ref("Config", "python", "pkg/app.py", 5, "pkg/config")
 )
 
 const (
@@ -69,6 +74,10 @@ func TestCalleeChanged(t *testing.T) {
 		{"unresolved method name not unique", view().mine(item(myItem, myIntent, refs(callLoadM))).
 			peer(bob, item(bobItem, bobIntent, changes(sigChange(loadM, "load(string, boolean): void", true)))).
 			peer(carol, item(carolItem, "Speed up the store", changes(bodyChange(fn("typescript", "src/db.ts", "Store.load", "load(): Row"))))).v, ""},
+		{"typescript constructor through new", view().mine(item(myItem, myIntent, refs(newCfg))).
+			peer(bob, item(bobItem, bobIntent, changes(sigChange(tsCtor, "constructor(string, number)", true)))).v, model.SeverityAct},
+		{"python __init__ through a call of the class", view().mine(item(myItem, myIntent, refs(callPyCfg))).
+			peer(bob, item(bobItem, bobIntent, changes(sigChange(pyInit, "def __init__(self, path, mode)", true)))).v, model.SeverityAct},
 		{"suppressed by my need", callerView(cfgBreaking).need(me, model.Need{Key: cfg.Key, Name: cfg.Ref(), Item: myItem}).v, ""},
 		{"not suppressed by a need of my other item", callerView(cfgBreaking).need(me, model.Need{Key: cfg.Key, Item: myItem2}).v, model.SeverityAct},
 		{"I change it too", callerView(cfgBreaking, changes(bodyChange(cfg))).v, ""},

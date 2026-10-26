@@ -724,6 +724,12 @@ JavaScript named or default import used as a qualifier names a class when
 it is capitalized, and otherwise an exported object, whose members are
 taken for the module's own functions.
 
+Building an instance names the class, while its parameters belong to the
+constructor, a method of its own. So a resolved `new X(...)` in TypeScript
+or JavaScript, and a resolved call `X(...)` in Python, also match the
+constructor of a class `X` (`constructor`, `__init__`), with the class's
+name, container and module standing in for the constructor's.
+
 ## 10. Rules
 
 Rules run in each server over its own view and produce notes for its own
