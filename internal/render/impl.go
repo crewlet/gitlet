@@ -323,10 +323,13 @@ func clean(s string) string {
 // titles, summaries and labels through oneLine; details, warnings, bodies
 // and evidence through flat. Other agents' words reach many of them (task
 // intents, published signatures, pull request links), and on one line they
-// cannot add a line of their own, such as an options block.
+// cannot add a line of their own, such as an options block. Neither keeps a
+// run of three double quotes, so those words cannot pass for a quote block.
 
 // oneLine cleans s and folds it onto one line with single spaces.
-func oneLine(s string) string { return cut(strings.Join(strings.Fields(clean(s)), " "), maxLineRunes) }
+func oneLine(s string) string {
+	return cut(neutralizeQuotes(strings.Join(strings.Fields(clean(s)), " ")), maxLineRunes)
+}
 
 // flat cleans s and folds its lines onto one, joined by single spaces. It
 // keeps the spacing within a line ("Config  (compatible)") and the first
@@ -341,7 +344,7 @@ func flat(s string) string {
 			parts = append(parts, l)
 		}
 	}
-	return cut(strings.Join(parts, " "), maxLineRunes)
+	return cut(neutralizeQuotes(strings.Join(parts, " ")), maxLineRunes)
 }
 
 // cut shortens s to n runes, marking the cut with "…".
