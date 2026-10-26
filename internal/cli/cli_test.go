@@ -378,9 +378,6 @@ func TestRenderedOptionsRun(t *testing.T) {
 	}
 	for _, o := range options {
 		line := render.Option(o, render.CLI)
-		if line == "" {
-			t.Skip("render not implemented yet")
-		}
 		words := shellWords(t, line)
 		if len(words) < 2 || words[0] != "gitlet" || words[1] != o.Tool {
 			t.Errorf("%s: rendered %q", o.Tool, line)
@@ -721,14 +718,7 @@ func TestToolsAndCommandsCoverSameVerbs(t *testing.T) {
 	}
 }
 
-// ---- integration (real engine; skipped while it is a stub) ----
-
-func skipIfNotImplemented(t *testing.T, output string) {
-	t.Helper()
-	if strings.Contains(output, "not implemented") {
-		t.Skipf("not implemented yet: %s", strings.TrimSpace(output))
-	}
-}
+// ---- integration (real engine) ----
 
 // tempRepo creates a git repository with one commit holding a Go file.
 func tempRepo(t *testing.T) string {
@@ -760,7 +750,6 @@ func TestIntegrationVerbs(t *testing.T) {
 	}
 
 	code, out, errOut := run("status")
-	skipIfNotImplemented(t, errOut)
 	if code != exitOK || !strings.HasPrefix(out, "ok: ") {
 		t.Fatalf("status: exit %d\n%s%s", code, out, errOut)
 	}
@@ -799,7 +788,6 @@ func TestIntegrationInitDryRun(t *testing.T) {
 	dir := tempRepo(t)
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"init", "--dry-run", "--client", "claude-code", "--worktree", dir}, strings.NewReader(""), &stdout, &stderr)
-	skipIfNotImplemented(t, stderr.String())
 	if code != exitOK {
 		t.Fatalf("exit %d\n%s%s", code, stdout.String(), stderr.String())
 	}

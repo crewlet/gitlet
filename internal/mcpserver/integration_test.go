@@ -16,15 +16,6 @@ import (
 	"github.com/crewlet/gitlet/internal/api"
 )
 
-// skipIfNotImplemented skips the test while the engine or a package under
-// it is still a stub.
-func skipIfNotImplemented(t *testing.T, res *mcp.CallToolResult) {
-	t.Helper()
-	if res.IsError && strings.Contains(text(res), "not implemented") {
-		t.Skipf("engine not implemented yet: %s", text(res))
-	}
-}
-
 // tempRepo creates a git repository with one commit holding a Go file.
 func tempRepo(t *testing.T) string {
 	t.Helper()
@@ -107,7 +98,6 @@ func TestIntegrationEveryTool(t *testing.T) {
 			t.Fatalf("%s: protocol error: %v", c.tool, err)
 		}
 		if i == 0 {
-			skipIfNotImplemented(t, res)
 		}
 		called[c.tool] = true
 		var r struct {

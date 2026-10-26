@@ -2,15 +2,14 @@ package hook
 
 // Integration tests run the hooks against a real ledger and the real
 // renderer, and those that read git state against a real repository too.
-// They skip while a dependency is still a stub.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,59 +21,11 @@ import (
 	"github.com/crewlet/gitlet/internal/render"
 )
 
-// requireLedger skips the test while the ledger or render is a stub.
-func requireLedger(t *testing.T) {
+// requireGit skips the test when git is not installed.
+func requireGit(t *testing.T) {
 	t.Helper()
-	ctx := context.Background()
-	dir := t.TempDir()
-	skipUnimplemented(t, "ledger", func() error {
-		l, err := ledger.Open(ctx, filepath.Join(dir, "probe.db"), ledger.Options{})
-		if err != nil {
-			return err
-		}
-		defer l.Close()
-		_, _, err = l.AgentFor(ctx, dir)
-		return err
-	})
-	probe := model.Note{ID: "n-000000000000", Kind: model.NoteUntitled, Severity: model.SeverityAct, Title: "probe"}
-	if render.Note(probe, render.MCP) == "" {
-		t.Skip("render: not implemented")
-	}
-}
-
-// requireDeps skips the test while gitx, the ledger or render is a stub.
-func requireDeps(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	skipUnimplemented(t, "gitx", func() error {
-		_, err := gitx.Open(context.Background(), dir)
-		if errors.Is(err, gitx.ErrNotRepo) {
-			return nil
-		}
-		return err
-	})
-	requireLedger(t)
-}
-
-// skipUnimplemented runs probe and skips the test when it returns or panics
-// with a "not implemented" error, as the stub dependencies do. Other
-// failures fail the test.
-func skipUnimplemented(t *testing.T, name string, probe func() error) {
-	t.Helper()
-	err := func() (err error) {
-		defer func() {
-			if p := recover(); p != nil {
-				err = fmt.Errorf("panic: %v", p)
-			}
-		}()
-		return probe()
-	}()
-	switch {
-	case err == nil:
-	case strings.Contains(err.Error(), "not implemented"):
-		t.Skipf("%s: %v", name, err)
-	default:
-		t.Fatalf("%s: %v", name, err)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
 	}
 }
 
@@ -195,7 +146,6 @@ type pathsFixture struct{ root, common string }
 
 func newPathsFixture(t *testing.T, notes ...model.Note) *pathsFixture {
 	t.Helper()
-	requireLedger(t)
 	root := t.TempDir()
 	f := &pathsFixture{root: root, common: filepath.Join(root, ".git")}
 	if err := os.Mkdir(f.common, 0o755); err != nil {
@@ -348,7 +298,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	requireDeps(t)
+	requireGit(t)
 	dir := newGitRepo(t)
 	gitIn(t, dir, nil, "switch", "-q", "-c", testBranch)
 	repo, err := gitx.Open(context.Background(), dir)
@@ -612,7 +562,7 @@ func TestIntegrationPrePush(t *testing.T) {
 }
 
 func TestIntegrationSilence(t *testing.T) {
-	requireDeps(t)
+	requireGit(t)
 	notRepo, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

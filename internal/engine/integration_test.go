@@ -17,107 +17,24 @@ import (
 	"github.com/crewlet/gitlet/internal/api"
 	"github.com/crewlet/gitlet/internal/bus"
 	"github.com/crewlet/gitlet/internal/config"
-	"github.com/crewlet/gitlet/internal/footprint"
-	"github.com/crewlet/gitlet/internal/gitx"
 	"github.com/crewlet/gitlet/internal/model"
 	"github.com/crewlet/gitlet/internal/render"
-	"github.com/crewlet/gitlet/internal/rules"
 )
 
 // The tests in this file run the engine on real git: a bare remote and two
-// clones of it, one per agent. They skip while a dependency of the engine
-// is still a stub.
+// clones of it, one per agent.
 
-// ---- dependency guard ----
-
-var (
-	depsOnce sync.Once
-	depsErr  error
-)
-
-// requireDeps skips the test while any engine dependency is not
-// implemented yet.
+// requireDeps skips the test when git is not installed.
 func requireDeps(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found")
 	}
-	depsOnce.Do(func() { depsErr = probeDeps() })
-	if depsErr != nil {
-		t.Skipf("engine dependencies not implemented yet: %v", depsErr)
-	}
 }
 
-func notImplemented(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "not implemented")
-}
-
-// guard runs f, turning a stub's "not implemented" panic into an error.
-func guard(f func() error) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			if !strings.Contains(fmt.Sprint(r), "not implemented") {
-				panic(r)
-			}
-			err = fmt.Errorf("%v", r)
-		}
-	}()
-	return f()
-}
-
-type emptySource struct{}
-
-func (emptySource) DiffNameStatus(context.Context, string, string) ([]gitx.DiffEntry, error) {
-	return nil, nil
-}
-
-func (emptySource) ReadFile(context.Context, string, string) ([]byte, error) {
-	return nil, errors.New("no files")
-}
-
-func probeDeps() error {
-	ctx := context.Background()
-	if err := guard(func() error {
-		_, err := footprint.Compute(ctx, emptySource{}, "a", "b", footprint.Options{})
-		return err
-	}); notImplemented(err) {
-		return err
-	}
-	if score, _ := rules.Similarity("add strict mode", "add strict mode", nil); score == 0 {
-		return errors.New("rules: not implemented")
-	}
-	if render.Text(&api.Result{Outcome: api.OK, Summary: "probe"}, render.CLI) == "" {
-		return errors.New("render: not implemented")
-	}
-	dir, err := os.MkdirTemp("", "gitlet-probe-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	for _, args := range [][]string{{"init", "-q"}, {"commit", "-q", "--allow-empty", "-m", "probe"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("git %v: %v: %s", args, err, out)
-		}
-	}
-	return guard(func() error {
-		e, err := Open(ctx, Options{Dir: dir, Client: "test", Offline: true})
-		if err != nil {
-			return err
-		}
-		defer e.Close()
-		_, err = e.Status(ctx, api.StatusInput{})
-		return err
-	})
-}
-
-// must fails the test on err, or skips it when err comes from a stub.
+// must fails the test on err.
 func must(t *testing.T, err error) {
 	t.Helper()
-	if notImplemented(err) {
-		t.Skipf("not implemented yet: %v", err)
-	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,12 +150,8 @@ func openEngine(t *testing.T, opt Options) *Engine {
 	if opt.Client == "" {
 		opt.Client = "test"
 	}
-	var e *Engine
-	must(t, guard(func() error {
-		var err error
-		e, err = Open(context.Background(), opt)
-		return err
-	}))
+	e, err := Open(context.Background(), opt)
+	must(t, err)
 	t.Cleanup(func() { _ = e.Close() })
 	return e
 }

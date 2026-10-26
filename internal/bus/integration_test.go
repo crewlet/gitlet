@@ -17,19 +17,14 @@ import (
 )
 
 // These tests drive the bus through real git: a bare repository is the
-// remote and each clone is one machine. They skip while gitx is still a
-// stub, so the bus can be built before it.
+// remote and each clone is one machine.
 
-// must fails the test on err, or skips it when err comes from a gitx stub.
+// must fails the test on err.
 func must(t *testing.T, err error) {
 	t.Helper()
-	if err == nil {
-		return
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(err.Error(), "not implemented") {
-		t.Skipf("gitx is not implemented yet: %v", err)
-	}
-	t.Fatal(err)
 }
 
 // git runs a setup command and returns its trimmed output.
