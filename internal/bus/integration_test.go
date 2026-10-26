@@ -530,3 +530,46 @@ func TestGitUnreachable(t *testing.T) {
 		t.Fatal("Flush did not publish the offline write")
 	}
 }
+
+// A single-branch clone keeps no remote-tracking ref for a branch it pushes,
+// so the remote's heads are asked for before a snapshot is refused.
+func TestGitWipAfterPushFromSingleBranchClone(t *testing.T) {
+	for _, how := range []string{"git push", "PushBranch"} {
+		t.Run(how, func(t *testing.T) {
+			ctx := context.Background()
+			g := newGitEnv(t)
+			path := filepath.Join(g.dir, "sb")
+			git(t, g.dir, "clone", "-q", "--single-branch", "--branch", "main", "file://"+g.remote, path)
+			r, err := gitx.Open(ctx, path)
+			must(t, err)
+			repo := r.Background()
+			a := g.bus(repo, agentA)
+			git(t, path, "switch", "-q", "-c", "gitlet/task")
+			must(t, os.WriteFile(filepath.Join(path, ".env.example"), []byte("API_URL=\n"), 0o644))
+			git(t, path, "add", "-A")
+			git(t, path, "commit", "-q", "-m", "document API_URL")
+			head := git(t, path, "rev-parse", "HEAD")
+			snap, err := repo.Snapshot(ctx, gitx.SnapshotOptions{Parent: head, Message: "gitlet: snapshot"})
+			must(t, err)
+			var rej *RejectedError
+			if err := a.WriteWip(ctx, itemA, snap.Commit); !errors.As(err, &rej) {
+				t.Fatalf("before the push: WriteWip = %v, want a refusal", err)
+			}
+			if how == "git push" {
+				git(t, path, "push", "-q", "-u", "origin", "gitlet/task")
+			} else {
+				_, err = a.PushBranch(ctx, head, "gitlet/task", "")
+				must(t, err)
+			}
+			if out := git(t, path, "for-each-ref", "refs/remotes/origin/gitlet/"); out != "" {
+				t.Fatalf("setup: the clone tracks the pushed branch: %s", out)
+			}
+			must(t, os.WriteFile(filepath.Join(path, "fix.txt"), []byte("review fix\n"), 0o644))
+			snap, err = repo.Snapshot(ctx, gitx.SnapshotOptions{Parent: head, Message: "gitlet: snapshot"})
+			must(t, err)
+			if err := a.WriteWip(ctx, itemA, snap.Commit); err != nil {
+				t.Fatalf("after the push: WriteWip = %v, want the snapshot published", err)
+			}
+		})
+	}
+}

@@ -85,6 +85,7 @@ type Repo interface {
 	Fetch(ctx context.Context, opt gitx.FetchOptions) error
 	Push(ctx context.Context, opt gitx.PushOptions) (gitx.PushReport, error)
 	PushExcluded(ctx context.Context, commit string, published []string, maxSize int64) ([]string, error)
+	LsRemote(ctx context.Context, remote string, patterns ...string) (map[string]string, error)
 }
 
 // PushLog remembers what this clone last pushed to each ref (the ledger).

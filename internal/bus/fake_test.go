@@ -507,6 +507,31 @@ func (r *fakeRepo) Push(ctx context.Context, opt gitx.PushOptions) (gitx.PushRep
 	return rep, nil
 }
 
+// LsRemote lists the fake remote's refs under the patterns, which end in
+// "*" or name a ref.
+func (r *fakeRepo) LsRemote(ctx context.Context, remote string, patterns ...string) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r.remote == nil {
+		return nil, &gitx.Error{Args: []string{"ls-remote", remote}, ExitCode: 128, Stderr: "fatal: '" + remote + "' does not appear to be a git repository"}
+	}
+	r.remote.mu.Lock()
+	defer r.remote.mu.Unlock()
+	if r.remote.down {
+		return nil, errFakeNetwork
+	}
+	out := map[string]string{}
+	for name, oid := range r.remote.refs {
+		for _, p := range patterns {
+			if prefix, glob := strings.CutSuffix(p, "*"); glob && strings.HasPrefix(name, prefix) || name == p {
+				out[name] = oid
+			}
+		}
+	}
+	return out, nil
+}
+
 // PushExcluded walks the fake store the way the real one checks a push:
 // every path at which something commit reaches, and no ref matching
 // published reaches, holds a blob no such ref reaches.
@@ -527,6 +552,11 @@ func (r *fakeRepo) PushExcluded(ctx context.Context, commit string, published []
 		}
 	}
 	r.mu.Unlock()
+	for _, p := range published {
+		if !strings.HasPrefix(p, "refs/") {
+			tips = append(tips, p) // a commit id; reach skips one the store lacks
+		}
+	}
 	have := map[string]bool{} // what the tips reach
 	var reach func(oid string)
 	reach = func(oid string) {

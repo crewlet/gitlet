@@ -287,7 +287,9 @@ func IsDenied(path string) bool { return isDenied(path) }
 // and files larger than maxSize (0 means no limit) among the blobs commit
 // reaches and the refs matching published do not. published holds
 // for-each-ref patterns ("refs/remotes/origin/") for the refs the remote is
-// known to have, so these are the blobs the push would send. Each is
+// known to have, and may hold commit ids the remote has (from LsRemote);
+// ids this clone lacks are skipped. So these are the blobs the push would
+// send. Each is
 // checked at every path a commit the push would send holds it at, so a
 // denied file renamed or copied under an allowed name is still found. A
 // snapshot leaves such files out of what it changes, so the ones found come

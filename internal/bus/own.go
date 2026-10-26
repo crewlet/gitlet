@@ -165,8 +165,9 @@ func (b *Bus) writeWip(ctx context.Context, item model.ItemID, commit string) er
 // The copies of outside branches (refs/gitlet-heads/<remote>/) do not
 // count as published: the outside fetch never prunes them and runs only
 // every outside interval, so they can still name commits a branch deleted
-// or rewritten on the remote took away. No local branch is built from
-// them, so leaving them out costs at most a refused snapshot.
+// or rewritten on the remote took away. Before refusing, the remote's
+// branch heads are asked for (ls-remote), which covers clones that keep no
+// remote-tracking ref for a pushed branch.
 func (b *Bus) checkUnpushed(ctx context.Context, ref, commit string) error {
 	if b.remoteName == "" {
 		return nil
@@ -179,6 +180,18 @@ func (b *Bus) checkUnpushed(ctx context.Context, ref, commit string) error {
 	paths, err := b.repo.PushExcluded(ctx, commit, published, b.maxSnap)
 	if err != nil || len(paths) == 0 {
 		return err
+	}
+	// A push does not always leave a remote-tracking ref behind (a
+	// single-branch or shallow clone fetches one branch), so before
+	// refusing, ask the remote which branch heads it has. Unreachable, the
+	// refusal stands.
+	if heads, err := b.repo.LsRemote(ctx, b.remoteName, "refs/heads/*"); err == nil && len(heads) > 0 {
+		for _, oid := range heads {
+			published = append(published, oid)
+		}
+		if paths, err = b.repo.PushExcluded(ctx, commit, published, b.maxSnap); err != nil || len(paths) == 0 {
+			return err
+		}
 	}
 	const shown = 5
 	list := strings.Join(paths[:min(len(paths), shown)], ", ")

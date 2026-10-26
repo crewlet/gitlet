@@ -371,6 +371,13 @@ func TestPushExcluded(t *testing.T) {
 	// Now the walk meets the shared blob as .env first.
 	check("nothing published", nil, 1024, ".env", ".env.example", "config/.env.local", "data/big.bin", "fixture.bin", "sp ace.key")
 
+	// Commit ids the remote has count like refs; ids this clone lacks are
+	// skipped.
+	local := f.git("rev-parse", "HEAD")
+	check("published by id", []string{local}, 1024)
+	check("missing id", []string{strings.Repeat("e", len(local)), "refs/remotes/origin/"}, 1024,
+		"config/.env.local", "data/big.bin", "sp ace.key")
+
 	f.git("push", "-q", "origin", "main")
 	check("after the push", published, 1024)
 
@@ -396,7 +403,7 @@ func TestPushExcluded(t *testing.T) {
 	for _, bad := range []struct {
 		commit    string
 		published []string
-	}{{"--all", nil}, {head, []string{"--all"}}, {head, []string{"refs/x\nrefs/y"}}} {
+	}{{"--all", nil}, {head, []string{"--all"}}, {head, []string{"HEAD"}}, {head, []string{"refs/x\nrefs/y"}}} {
 		if _, err := f.repo.PushExcluded(bg, bad.commit, bad.published, 0); err == nil {
 			t.Errorf("PushExcluded(%q, %q) succeeded", bad.commit, bad.published)
 		}

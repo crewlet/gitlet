@@ -586,7 +586,11 @@ their container (section 9.6).
   so they can still hold commits that a branch deleted or rewritten on the
   remote took away, for example to drop a leaked secret. When the commits the
   push would send hold a denied or oversized file (`git add -A && git commit`
-  caught a `.env.local`), the snapshot is not pushed: the item gets
+  caught a `.env.local`), gitlet first asks the remote for its branch heads
+  (`ls-remote`) and also counts the ones this clone has, since a push from a
+  single-branch or shallow clone leaves no remote-tracking ref behind. If
+  the files are still found, or the remote does not answer, the snapshot is
+  not pushed: the item gets
   `snapshotError` naming the files and its footprint is still published.
   Once those commits are pushed or rewritten, the next snapshot of a changed
   work tree is published.

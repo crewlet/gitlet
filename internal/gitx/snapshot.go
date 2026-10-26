@@ -389,23 +389,50 @@ func (s *snapper) blobSizes(changes []indexChange) (map[string]int64, error) {
 	return sizes, nil
 }
 
+// isOID reports whether s is a full object id, SHA-1 or SHA-256.
+func isOID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	return strings.Trim(s, "0123456789abcdef") == ""
+}
+
 func (r *Repo) pushExcluded(ctx context.Context, commit string, published []string, maxSize int64) ([]string, error) {
 	if err := checkRev(commit); err != nil {
 		return nil, err
 	}
 	revs := []string{commit}
-	if len(published) > 0 {
-		for _, p := range published {
-			if !strings.HasPrefix(p, "refs/") || strings.ContainsAny(p, "\x00\n") {
-				return nil, fmt.Errorf("gitx: invalid ref pattern %q", p)
-			}
+	var patterns, oids []string
+	for _, p := range published {
+		switch {
+		case isOID(p):
+			oids = append(oids, p)
+		case strings.HasPrefix(p, "refs/") && !strings.ContainsAny(p, "\x00\n"):
+			patterns = append(patterns, p)
+		default:
+			return nil, fmt.Errorf("gitx: invalid ref pattern %q", p)
 		}
-		out, err := r.read(ctx, append([]string{"for-each-ref", "--format=%(objectname)"}, published...)...)
+	}
+	if len(patterns) > 0 {
+		out, err := r.read(ctx, append([]string{"for-each-ref", "--format=%(objectname)"}, patterns...)...)
 		if err != nil {
 			return nil, err
 		}
 		for _, oid := range lines(out) {
 			revs = append(revs, "^"+oid)
+		}
+	}
+	if len(oids) > 0 {
+		// The remote's tips this clone does not have cannot be walked, and
+		// nothing local builds on them.
+		out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(oids, "\n") + "\n")}, "cat-file", "--batch-check=%(objectname) %(objecttype)")
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range lines(string(out)) {
+			if oid, typ, _ := strings.Cut(l, " "); typ == "commit" {
+				revs = append(revs, "^"+oid)
+			}
 		}
 	}
 	// The tips go through stdin: a clone can track many refs. Commits are
