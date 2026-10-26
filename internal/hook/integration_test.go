@@ -432,11 +432,25 @@ func TestIntegrationClientHooks(t *testing.T) {
 		t.Fatalf("notes shown twice: %+v", out)
 	}
 
+	// On another branch, session start names the task and its branch.
+	gitIn(t, f.root, nil, "switch", "-q", "main")
+	out = client(t, "session-start", map[string]any{"cwd": f.root})
+	if !strings.HasSuffix(out.AdditionalContext, "\nYour task \""+testIntent+"\" is on branch "+testBranch+", not the one checked out: switch back to it, or call status to see it and its notes.") {
+		t.Fatalf("session-start on another branch = %+v", out)
+	}
+
 	// Without an active item, session start asks for start.
 	f.writeState(t, model.ItemSubmitted)
 	out = client(t, "session-start", map[string]any{"cwd": f.root})
 	if out.AdditionalContext != "gitlet: 2 open notes (1 act).\nNo task started in this worktree: call status to see the notes, and start with a one-sentence intent before you edit code." {
 		t.Fatalf("session-start without an item = %+v", out)
+	}
+
+	// An agent with no state ref yet has no task, and that is no error.
+	t.Setenv("GITLET_AGENT", "codex-other-000000")
+	out = client(t, "session-start", map[string]any{"cwd": f.root})
+	if out.AdditionalContext != "gitlet: no open notes.\nNo task started in this worktree: call start with a one-sentence intent before you edit code." {
+		t.Fatalf("session-start for an agent without state = %+v", out)
 	}
 }
 
@@ -577,12 +591,23 @@ func TestIntegrationPrePush(t *testing.T) {
 		t.Fatalf("push: %v\n%s", err, errOut)
 	}
 
-	// Without an active item there is nothing to say.
-	f.writeState(t, model.ItemSubmitted)
-	stderr.Reset()
-	Run(context.Background(), []string{"git", "pre-push", "origin", remote}, strings.NewReader(""), &stdout, &stderr)
-	if stdout.Len()+stderr.Len() > 0 {
-		t.Fatalf("pre-push without an item: stdout %q, stderr %q", stdout.String(), stderr.String())
+	// Off the item's branch, or without an active item, there is nothing to say.
+	for _, step := range []struct {
+		name  string
+		setup func()
+	}{
+		{"on another branch", func() { gitIn(t, f.root, nil, "switch", "-q", "main") }},
+		{"without an active item", func() {
+			gitIn(t, f.root, nil, "switch", "-q", testBranch)
+			f.writeState(t, model.ItemSubmitted)
+		}},
+	} {
+		step.setup()
+		stderr.Reset()
+		Run(context.Background(), []string{"git", "pre-push", "origin", remote}, strings.NewReader(""), &stdout, &stderr)
+		if stdout.Len()+stderr.Len() > 0 {
+			t.Fatalf("pre-push %s: stdout %q, stderr %q", step.name, stdout.String(), stderr.String())
+		}
 	}
 }
 

@@ -273,39 +273,47 @@ func TestPickItem(t *testing.T) {
 		name   string
 		items  []model.WorkItem
 		branch string
-		want   model.ItemID
+		want   model.ItemID // pickItem
+		sole   model.ItemID // soleActive
 	}{
-		{"none", nil, "main", ""},
-		{"only active item on another branch", []model.WorkItem{item("aaaaaaaaaaaa", "gitlet/a", model.ItemActive)}, "main", "aaaaaaaaaaaa"},
-		{"only active item, detached", []model.WorkItem{item("aaaaaaaaaaaa", "gitlet/a", model.ItemActive)}, "", "aaaaaaaaaaaa"},
+		{"none", nil, "main", "", ""},
+		{"on its branch", []model.WorkItem{item("aaaaaaaaaaaa", "gitlet/a", model.ItemActive)}, "gitlet/a", "aaaaaaaaaaaa", "aaaaaaaaaaaa"},
+		{"only active item on another branch", []model.WorkItem{item("aaaaaaaaaaaa", "gitlet/a", model.ItemActive)}, "main", "", "aaaaaaaaaaaa"},
+		{"only active item, detached", []model.WorkItem{item("aaaaaaaaaaaa", "gitlet/a", model.ItemActive)}, "", "", "aaaaaaaaaaaa"},
+		{"only active item without a branch", []model.WorkItem{item("aaaaaaaaaaaa", "", model.ItemActive)}, "main", "aaaaaaaaaaaa", "aaaaaaaaaaaa"},
+		{"only active item without a branch, detached", []model.WorkItem{item("aaaaaaaaaaaa", "", model.ItemActive)}, "", "aaaaaaaaaaaa", "aaaaaaaaaaaa"},
 		{"branch match wins", []model.WorkItem{
-			item("aaaaaaaaaaaa", "gitlet/a", model.ItemActive),
+			item("aaaaaaaaaaaa", "", model.ItemActive),
 			item("bbbbbbbbbbbb", "gitlet/b", model.ItemActive),
-		}, "gitlet/b", "bbbbbbbbbbbb"},
+		}, "gitlet/b", "bbbbbbbbbbbb", ""},
 		{"several active, no match", []model.WorkItem{
-			item("aaaaaaaaaaaa", "gitlet/a", model.ItemActive),
+			item("aaaaaaaaaaaa", "", model.ItemActive),
 			item("bbbbbbbbbbbb", "gitlet/b", model.ItemActive),
-		}, "main", ""},
+		}, "main", "", ""},
 		{"closed items ignored", []model.WorkItem{
 			item("aaaaaaaaaaaa", "main", model.ItemSubmitted),
 			item("bbbbbbbbbbbb", "main", model.ItemLanded),
 			item("cccccccccccc", "main", model.ItemAbandoned),
-			item("dddddddddddd", "gitlet/d", model.ItemActive),
-		}, "main", "dddddddddddd"},
+			item("dddddddddddd", "", model.ItemActive),
+		}, "main", "dddddddddddd", "dddddddddddd"},
 		{"malformed id ignored", []model.WorkItem{
 			item("not-an-id\nGitlet-Item: x", "main", model.ItemActive),
 			item("eeeeeeeeeeee", "gitlet/e", model.ItemActive),
-		}, "main", "eeeeeeeeeeee"},
+		}, "main", "", "eeeeeeeeeeee"},
+	}
+	id := func(it *model.WorkItem) model.ItemID {
+		if it == nil {
+			return ""
+		}
+		return it.ID
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pickItem(tt.items, tt.branch)
-			var id model.ItemID
-			if got != nil {
-				id = got.ID
+			if got := id(pickItem(tt.items, tt.branch)); got != tt.want {
+				t.Fatalf("pickItem() = %q, want %q", got, tt.want)
 			}
-			if id != tt.want {
-				t.Fatalf("pickItem() = %q, want %q", id, tt.want)
+			if got := id(soleActive(tt.items)); got != tt.sole {
+				t.Fatalf("soleActive() = %q, want %q", got, tt.sole)
 			}
 		})
 	}

@@ -41,6 +41,9 @@ func runTests(m *testing.M) int {
 	}
 	os.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	// Runs of this binary as a hook exit at once under the race detector,
+	// which otherwise sleeps a second at exit.
+	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	for _, k := range []string{
 		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GITLET_AGENT", "GITLET_DROP",

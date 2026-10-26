@@ -46,8 +46,9 @@ func (r *runner) git(ctx context.Context, args []string) {
 }
 
 // prepareCommitMsg adds Gitlet-Item and Gitlet-Agent trailers to the message
-// file when the worktree's agent has an active item (docs/SPEC.md, section
-// 12.5). args are git's: the file, then the message source and a commit.
+// file when the commit belongs to an active item of the worktree's agent
+// (docs/SPEC.md, section 12.5; see pickItem). args are git's: the file, then
+// the message source and a commit.
 func (r *runner) prepareCommitMsg(ctx context.Context, args []string) error {
 	file, source := args[0], ""
 	if len(args) > 1 {
@@ -85,7 +86,8 @@ func (r *runner) prepareCommitMsg(ctx context.Context, args []string) error {
 	case op == "rebase" || op == "cherry-pick" || op == "merge":
 		return nil
 	}
-	item, err := activeItem(ctx, s.repo, s.agent)
+	items, branch, err := agentItems(ctx, s.repo, s.agent)
+	item := pickItem(items, branch)
 	if err != nil || item == nil {
 		return err
 	}
@@ -139,9 +141,9 @@ func (r *runner) postCommit(ctx context.Context) error {
 	return nil
 }
 
-// prePush prints the submit checks a hook can make offline (docs/SPEC.md,
-// section 12.4) before the agent's own git push, and the reminder that
-// gitlet submit opens the pull request. It never blocks the push: every
+// prePush prints, when the current branch belongs to an active item, the
+// submit checks a hook can make offline (docs/SPEC.md, section 12.4) and
+// the reminder that gitlet submit opens the pull request. It never blocks the push: every
 // check is best effort, and failed checks are left out.
 func (r *runner) prePush(ctx context.Context, args []string) error {
 	var remote string
@@ -157,7 +159,8 @@ func (r *runner) prePush(ctx context.Context, args []string) error {
 		return err
 	}
 	defer s.close()
-	item, err := activeItem(ctx, s.repo, s.agent)
+	items, branch, err := agentItems(ctx, s.repo, s.agent)
+	item := pickItem(items, branch)
 	if err != nil || item == nil {
 		return err
 	}

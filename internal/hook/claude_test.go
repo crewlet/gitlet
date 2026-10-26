@@ -192,30 +192,41 @@ func TestNotesTextUsesRender(t *testing.T) {
 func TestSessionStatus(t *testing.T) {
 	item := &model.WorkItem{ID: "8c1f0e2a9b3d", Intent: "Add strict mode to config loading", Branch: "gitlet/add-strict-mode-8c1f", Status: model.ItemActive}
 	provisional := &model.WorkItem{ID: "8c1f0e2a9b3d", Intent: "fix parser", Branch: "fix-parser", Status: model.ItemActive, Provisional: true}
+	detached := &model.WorkItem{ID: "8c1f0e2a9b3d", Intent: "untitled", Status: model.ItemActive, Provisional: true}
+	noBranch := &model.WorkItem{ID: "8c1f0e2a9b3d", Intent: "Fix the parser", Status: model.ItemActive}
 	long := &model.WorkItem{ID: "8c1f0e2a9b3d", Intent: strings.Repeat("word ", 40), Branch: "b", Status: model.ItemActive}
 	tests := []struct {
 		name      string
 		open, act int
 		item      *model.WorkItem
+		branch    string
 		known     bool
 		want      string
 	}{
-		{"no notes, no task", 0, 0, nil, true,
+		{"no notes, no task", 0, 0, nil, "main", true,
 			"gitlet: no open notes.\nNo task started in this worktree: call start with a one-sentence intent before you edit code."},
-		{"notes, no task", 2, 1, nil, true,
+		{"notes, no task", 2, 1, nil, "main", true,
 			"gitlet: 2 open notes (1 act).\nNo task started in this worktree: call status to see the notes, and start with a one-sentence intent before you edit code."},
-		{"one note, task", 1, 0, item, true,
+		{"one note, task", 1, 0, item, item.Branch, true,
 			"gitlet: 1 open note (0 act).\nYour task: \"Add strict mode to config loading\" on branch gitlet/add-strict-mode-8c1f. Call status to see it, what overlaps it and every open note."},
-		{"provisional task", 0, 0, provisional, true,
+		{"task on another branch", 0, 0, item, "main", true,
+			"gitlet: no open notes.\nYour task \"Add strict mode to config loading\" is on branch gitlet/add-strict-mode-8c1f, not the one checked out: switch back to it, or call status to see it and its notes."},
+		{"task, detached HEAD", 0, 0, item, "", true,
+			"gitlet: no open notes.\nYour task \"Add strict mode to config loading\" is on branch gitlet/add-strict-mode-8c1f, not the one checked out: switch back to it, or call status to see it and its notes."},
+		{"task without a branch", 0, 0, noBranch, "", true,
+			"gitlet: no open notes.\nYour task: \"Fix the parser\". Call status to see it, what overlaps it and every open note."},
+		{"provisional task", 0, 0, provisional, "fix-parser", true,
 			"gitlet: no open notes.\nYour work on branch fix-parser has no stated task: call start with a one-sentence intent."},
-		{"state unreadable", 3, 3, nil, false,
+		{"provisional task without a branch", 0, 0, detached, "", true,
+			"gitlet: no open notes.\nYour work has no stated task: call start with a one-sentence intent."},
+		{"state unreadable", 3, 3, nil, "", false,
 			"gitlet: 3 open notes (3 act).\nCall status to see your task and notes, or start with a one-sentence intent before you edit code."},
-		{"long intent clipped", 0, 0, long, true,
+		{"long intent clipped", 0, 0, long, "b", true,
 			"gitlet: no open notes.\nYour task: \"" + strings.Repeat("word ", 40)[:97] + "...\" on branch b. Call status to see it, what overlaps it and every open note."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sessionStatus(tt.open, tt.act, tt.item, tt.known)
+			got := sessionStatus(tt.open, tt.act, tt.item, tt.branch, tt.known)
 			if got != tt.want {
 				t.Fatalf("sessionStatus() =\n%q\nwant\n%q", got, tt.want)
 			}

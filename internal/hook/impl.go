@@ -212,57 +212,71 @@ func (r *runner) agentFor(ctx context.Context, l *ledger.Ledger, root string) (m
 // stateRef is the agent's local state ref (docs/SPEC.md, section 6).
 func stateRef(agent model.AgentID) string { return "refs/gitlet/agents/" + string(agent) + "/state" }
 
-// activeItem returns the item the agent works on in this worktree, read from
-// its local state ref, or nil when it has none.
-func activeItem(ctx context.Context, repo *gitx.Repo, agent model.AgentID) (*model.WorkItem, error) {
+// agentItems reads the agent's work items from its local state ref and
+// returns them with the current branch ("" when detached). There are no
+// items when the agent has no state yet or a newer gitlet wrote it.
+func agentItems(ctx context.Context, repo *gitx.Repo, agent model.AgentID) (items []model.WorkItem, branch string, err error) {
 	if agent == "" {
-		return nil, nil
+		return nil, "", nil
 	}
 	data, err := repo.ReadFile(ctx, stateRef(agent), "state.json")
 	if errors.Is(err, gitx.ErrNotFound) {
-		return nil, nil
+		return nil, "", nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(data) > maxDoc {
-		return nil, fmt.Errorf("%s: state.json is larger than %d bytes", stateRef(agent), maxDoc)
+		return nil, "", fmt.Errorf("%s: state.json is larger than %d bytes", stateRef(agent), maxDoc)
 	}
 	var st model.AgentState
 	if err := json.Unmarshal(data, &st); err != nil {
-		return nil, fmt.Errorf("%s: %w", stateRef(agent), err)
+		return nil, "", fmt.Errorf("%s: %w", stateRef(agent), err)
 	}
 	if st.Format > model.Format {
-		return nil, nil // written by a newer gitlet; status reports it
+		return nil, "", nil // status reports it
 	}
-	branch, err := repo.CurrentBranch(ctx)
-	if err != nil {
-		return nil, err
+	if branch, err = repo.CurrentBranch(ctx); err != nil {
+		return nil, "", err
 	}
-	return pickItem(st.Items, branch), nil
+	return st.Items, branch, nil
 }
 
 // pickItem chooses the item work on branch belongs to: the active item on
-// that branch, else the only active item. Items with malformed ids are
-// skipped, since their id ends up in commit messages.
+// that branch, else the only active item if it records no branch (an
+// implicit item opened on a detached HEAD). Work on any other branch is not
+// the item's.
 func pickItem(items []model.WorkItem, branch string) *model.WorkItem {
-	var only *model.WorkItem
-	active := 0
 	for i := range items {
-		it := &items[i]
-		if it.Status != model.ItemActive || !model.ValidItemID(it.ID) {
-			continue
-		}
-		if branch != "" && it.Branch == branch {
+		if it := &items[i]; usable(it) && branch != "" && it.Branch == branch {
 			return it
 		}
-		only = it
-		active++
 	}
-	if active == 1 {
-		return only
+	if it := soleActive(items); it != nil && it.Branch == "" {
+		return it
 	}
 	return nil
+}
+
+// soleActive returns the only active item, or nil when there are none or
+// several.
+func soleActive(items []model.WorkItem) *model.WorkItem {
+	var only *model.WorkItem
+	for i := range items {
+		if it := &items[i]; usable(it) {
+			if only != nil {
+				return nil
+			}
+			only = it
+		}
+	}
+	return only
+}
+
+// usable reports whether it is active with a well-formed id. Items with
+// malformed ids are skipped, since their id ends up in commit messages.
+func usable(it *model.WorkItem) bool {
+	return it.Status == model.ItemActive && model.ValidItemID(it.ID)
 }
 
 // readAll reads rd up to max bytes and gives up when ctx is done: a host

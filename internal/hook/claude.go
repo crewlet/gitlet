@@ -192,24 +192,31 @@ func notesText(fresh, resolved []model.Note, mode render.Mode) string {
 // for the next hook or result.
 func (r *runner) sessionStart(ctx context.Context, s *session) (string, error) {
 	var open, act int
-	var item *model.WorkItem
+	var items []model.WorkItem
+	var branch string
 	itemKnown := true
 	if s.agent != "" {
 		var err error
 		if open, act, err = s.ledger.Counts(ctx, s.agent); err != nil {
 			return "", err
 		}
-		if item, err = activeItem(ctx, s.repo, s.agent); err != nil {
+		if items, branch, err = agentItems(ctx, s.repo, s.agent); err != nil {
 			r.report(err)
 			itemKnown = false
 		}
 	}
-	return sessionStatus(open, act, item, itemKnown), nil
+	// An active item on another branch is still the worktree's task, and
+	// start would refuse to open a second one: name it.
+	item := pickItem(items, branch)
+	if item == nil {
+		item = soleActive(items)
+	}
+	return sessionStatus(open, act, item, branch, itemKnown), nil
 }
 
-// sessionStatus words the session-start status. itemKnown is false when
-// the agent's state could not be read.
-func sessionStatus(open, act int, item *model.WorkItem, itemKnown bool) string {
+// sessionStatus words the session-start status. branch is the checked-out
+// branch, and itemKnown is false when the agent's state could not be read.
+func sessionStatus(open, act int, item *model.WorkItem, branch string, itemKnown bool) string {
 	var b strings.Builder
 	switch open {
 	case 0:
@@ -220,11 +227,19 @@ func sessionStatus(open, act int, item *model.WorkItem, itemKnown bool) string {
 		fmt.Fprintf(&b, "gitlet: %d open notes (%d act).\n", open, act)
 	}
 	switch {
+	case item != nil && item.Branch != "" && item.Branch != branch:
+		fmt.Fprintf(&b, "Your task %q is on branch %s, not the one checked out: switch back to it, or call status to see it and its notes.",
+			clip(item.Intent, 100), item.Branch)
+	case item != nil && item.Provisional && item.Branch == "":
+		b.WriteString("Your work has no stated task: call start with a one-sentence intent.")
 	case item != nil && item.Provisional:
 		fmt.Fprintf(&b, "Your work on branch %s has no stated task: call start with a one-sentence intent.", item.Branch)
 	case item != nil:
-		fmt.Fprintf(&b, "Your task: %q on branch %s. Call status to see it, what overlaps it and every open note.",
-			clip(item.Intent, 100), item.Branch)
+		fmt.Fprintf(&b, "Your task: %q", clip(item.Intent, 100))
+		if item.Branch != "" {
+			b.WriteString(" on branch " + item.Branch)
+		}
+		b.WriteString(". Call status to see it, what overlaps it and every open note.")
 	case itemKnown && open > 0:
 		b.WriteString("No task started in this worktree: call status to see the notes, and start with a one-sentence intent before you edit code.")
 	case itemKnown:
