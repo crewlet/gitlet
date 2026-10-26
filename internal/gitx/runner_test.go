@@ -43,6 +43,18 @@ func TestOpen(t *testing.T) {
 	if r, err := Open(bg, filepath.Join(link, "sub")); err != nil || r.Root != f.dir || r.GitDir != filepath.Join(f.dir, ".git") || r.CommonDir != r.GitDir {
 		t.Fatalf("Open through a symlink = %+v, %v", r, err)
 	}
+	// A symlink into a subdirectory: git prints the common dir relative to
+	// where it really runs ("../../.git"), not to the link.
+	deep := filepath.Join(t.TempDir(), "deep")
+	if err := os.Symlink(filepath.Join(f.dir, "sub", "dir"), deep); err != nil {
+		t.Fatal(err)
+	}
+	if r, err = Open(bg, deep); err != nil {
+		t.Fatal(err)
+	}
+	if r.Root != f.dir || r.GitDir != filepath.Join(f.dir, ".git") || r.CommonDir != r.GitDir {
+		t.Fatalf("Open through a symlink into a subdirectory: Root %s, GitDir %s, CommonDir %s", r.Root, r.GitDir, r.CommonDir)
+	}
 
 	wt := filepath.Join(t.TempDir(), "wt")
 	f.git("worktree", "add", "-q", "-b", "wt", wt)

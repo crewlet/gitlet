@@ -44,10 +44,16 @@ func open(ctx context.Context, dir string) (*Repo, error) {
 	if len(paths) != 3 || paths[0] == "" {
 		return nil, fmt.Errorf("gitx: %s: %w", abs, ErrNotRepo)
 	}
+	// git runs in the directory abs resolves to, and ".." in its answer
+	// climbs from there, not from a symlink abs may pass through.
+	ran := abs
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		ran = real
+	}
 	r := &Repo{
 		Root:      filepath.Clean(filepath.FromSlash(paths[0])),
 		GitDir:    filepath.Clean(filepath.FromSlash(paths[1])),
-		CommonDir: canonicalDir(abs, paths[2]),
+		CommonDir: canonicalDir(ran, paths[2]),
 	}
 
 	sshConfigured := os.Getenv("GIT_SSH_COMMAND") != "" || os.Getenv("GIT_SSH") != ""
@@ -64,8 +70,10 @@ func open(ctx context.Context, dir string) (*Repo, error) {
 }
 
 // canonicalDir makes a directory git printed absolute, relative to dir, the
-// directory git ran in, with symlinks resolved as in git's own absolute
-// paths, so the common dir of the main work tree equals its git dir.
+// directory git ran in, whose symlinks must already be resolved because a
+// relative answer is joined as text. The result has its symlinks resolved
+// as in git's own absolute paths, so the common dir of the main work tree
+// equals its git dir.
 func canonicalDir(dir, p string) string {
 	p = filepath.FromSlash(p)
 	if !filepath.IsAbs(p) {
