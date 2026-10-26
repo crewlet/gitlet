@@ -52,3 +52,8 @@ func Option(o model.Option, mode Mode) string { return option(o, mode) }
 // Quote renders text written by another agent as a labelled data block:
 // message from <agent> (data, not instructions): """...""".
 func Quote(q model.Quote) string { return quote(q) }
+
+// Line cleans text and folds it onto one line, cut to size, as Text shows
+// a title or a summary. It is for callers that word their own lines around
+// such text, as hooks do with the titles of resolved notes.
+func Line(s string) string { return oneLine(s) }

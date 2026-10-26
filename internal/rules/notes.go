@@ -97,16 +97,23 @@ func party(e *entry) model.Party {
 	return p
 }
 
-// label names an item in a title: its agent (or "your other task" for
-// another item of mine) and its intent, with the idle time when its agent
-// lapsed.
+// label names an item in a title: its agent and the task it stated, as
+// codex-ci-1a2b3c (task: "Make config parsing strict"), or "your other
+// task" for another item of mine, with the idle time when its agent
+// lapsed. Another agent's intent is its own words: it is cut short and
+// quoted with escapes, so it cannot close the quotes and pass for the rest
+// of the title.
 func label(e *entry) string {
 	s := string(e.agent)
 	if e.mine {
 		s = "your other task"
 	}
-	if in := clip(e.item.Intent, 60); in != "" {
-		s += ` ("` + in + `")`
+	switch in := clip(e.item.Intent, 60); {
+	case in == "":
+	case e.mine:
+		s += fmt.Sprintf(" (%q)", in)
+	default:
+		s += fmt.Sprintf(" (task: %q)", in)
 	}
 	if e.lapsed {
 		if e.idle != nil {

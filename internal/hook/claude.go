@@ -182,7 +182,7 @@ func notesText(fresh, resolved []model.Note, mode render.Mode) string {
 			fmt.Fprintf(&b, "and %d more resolved gitlet notes.\n", len(resolved)-i)
 			break
 		}
-		b.WriteString("resolved gitlet note: " + oneLine(n.Title) + "\n")
+		b.WriteString("resolved gitlet note: " + render.Line(n.Title) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
