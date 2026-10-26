@@ -339,7 +339,9 @@ func (s *snapper) dropExcluded() error {
 			continue
 		}
 		s.skipped = append(s.skipped, c.path)
-		fmt.Fprintf(&info, "0 %s\t%s\x00", ZeroOID, c.path) // remove every stage
+		// Remove every stage. The null id must have the repository's hash
+		// length, which the old id in the record has.
+		fmt.Fprintf(&info, "0 %s\t%s\x00", strings.Repeat("0", len(c.oldOID)), c.path)
 		if c.oldMode != "000000" {
 			fmt.Fprintf(&info, "%s %s\t%s\x00", c.oldMode, c.oldOID, c.path)
 		}

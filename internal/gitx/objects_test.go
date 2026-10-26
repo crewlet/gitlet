@@ -270,6 +270,42 @@ func TestUpdateRef(t *testing.T) {
 	}
 }
 
+// TestSHA256 covers the places that write an all-zero object id: they must
+// use the repository's hash length, not SHA-1's.
+func TestSHA256(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	gitIn(t, dir, nil, "init", "-q", "--object-format=sha256")
+	f := openFixture(t, dir)
+	c1 := f.commitFiles("one", map[string]string{"main.go": "package main\n", ".env": "OLD=1\n"})
+	if len(c1) != 64 {
+		t.Fatalf("commit id %q is not SHA-256", c1)
+	}
+
+	const ref = "refs/gitlet/agents/a/state"
+	if err := f.repo.UpdateRef(bg, ref, c1, ZeroOID); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := f.repo.UpdateRef(bg, ref, c1, ZeroOID); err == nil {
+		t.Fatal("second create succeeded")
+	}
+
+	// A changed denied file gets its parent version back, and a new one is
+	// removed, through update-index lines with a null id.
+	f.write(".env", "NEW_SECRET=2\n")
+	f.write("main.go", "package main\n\n// changed\n")
+	f.write("secrets.json", `{"token":"x"}`)
+	f.git("add", ".env", "secrets.json")
+	res, err := f.repo.Snapshot(bg, SnapshotOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{".env": "OLD=1\n", "main.go": "package main\n\n// changed\n"}
+	if got := f.treeFiles(res.Tree); !mapsEqual(got, want) {
+		t.Errorf("snapshot tree = %q, want %q", got, want)
+	}
+}
+
 func TestListRefs(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

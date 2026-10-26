@@ -353,6 +353,34 @@ func TestGitProbe(t *testing.T) {
 	}
 }
 
+func TestGitSHA256WithoutRemote(t *testing.T) {
+	ctx := context.Background()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := filepath.Join(t.TempDir(), "repo")
+	git(t, filepath.Dir(dir), "init", "-q", "--object-format=sha256", dir)
+	git(t, dir, "commit", "-q", "--allow-empty", "-m", "initial")
+	repo, err := gitx.Open(ctx, dir)
+	must(t, err)
+	b := New(repo, agentA, Options{Main: "main"})
+
+	// Create-only local writes: the state ref and a claim.
+	stOID, err := b.WriteState(ctx, sampleState(agentA), "")
+	must(t, err)
+	if len(stOID) != 64 {
+		t.Fatalf("state oid %q is not SHA-256", stOID)
+	}
+	won, view, err := b.CreateClaim(ctx, sampleClaim(keyA, agentA, itemA), "")
+	if err != nil || !won {
+		t.Fatalf("CreateClaim = %v, %v", won, err)
+	}
+	won, lost, err := New(repo, agentB, Options{Main: "main"}).CreateClaim(ctx, sampleClaim(keyA, agentB, itemB), "")
+	if err != nil || won || lost.OID != view.OID {
+		t.Fatalf("second CreateClaim = %v, %+v, %v; want the first claim", won, lost, err)
+	}
+}
+
 func TestGitUnreachable(t *testing.T) {
 	ctx := context.Background()
 	g := newGitEnv(t)

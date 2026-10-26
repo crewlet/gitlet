@@ -292,8 +292,9 @@ func (r *Repo) CommitFile(ctx context.Context, base, path string, content []byte
 }
 
 // UpdateRef sets ref to newOID if its current value is oldOID. oldOID ""
-// means any current value; ZeroOID means the ref must not exist. A failed
-// check returns an *Error whose Stderr mentions the mismatch.
+// means any current value; ZeroOID means the ref must not exist, in SHA-256
+// repositories too. A failed check returns an *Error whose Stderr mentions
+// the mismatch.
 func (r *Repo) UpdateRef(ctx context.Context, ref, newOID, oldOID string) error {
 	return r.updateRef(ctx, ref, newOID, oldOID)
 }

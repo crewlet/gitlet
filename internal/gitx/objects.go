@@ -212,11 +212,17 @@ func (r *Repo) updateRef(ctx context.Context, ref, newOID, oldOID string) error 
 		return err
 	}
 	args := []string{"update-ref", ref, newOID}
-	if oldOID != "" {
+	switch oldOID {
+	case "":
+	case ZeroOID:
+		// An empty old value means "must not exist" whatever the hash; the
+		// 40 zeros are not a valid id in a SHA-256 repository.
+		args = append(args, "")
+	default:
 		if err := checkRev(oldOID); err != nil {
 			return err
 		}
-		args = append(args, oldOID) // ZeroOID: the ref must not exist
+		args = append(args, oldOID)
 	}
 	_, err := r.exec(ctx, cmdOpts{}, args...)
 	return err
