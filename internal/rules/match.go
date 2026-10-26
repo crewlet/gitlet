@@ -117,21 +117,24 @@ func typeMember(s model.Symbol) bool {
 }
 
 // defaultExport reports whether a JavaScript ref through a module's default
-// export may reach sym. The footprint package gives such a ref the container
-// "default", as the importer cannot see the exported class's own name. A
-// qualified ref (Cfg.load()) reaches what any top-level class or namespace
-// of the module holds (an anonymous default class is named "default"
-// itself), but not the module's own functions. An unqualified one, a
-// `new Cfg()`, names the export itself, so it reaches top-level symbols
-// only (constructed lets it build any top-level class).
+// export may reach sym; the importer cannot see the exported class's own
+// name. A qualified ref (Cfg.load()), which the footprint package gives the
+// container "default", reaches what any top-level class or namespace of the
+// module holds (an anonymous default class is named "default" itself), but
+// not the module's own functions. An unqualified one, a `new Cfg()`, names
+// the export itself, so it reaches top-level symbols only (constructed lets
+// it build any top-level class). The footprint package marks it
+// DefaultExport and leaves its container empty, so by name it reaches what
+// any unqualified ref does; a footprint of version 4 gave it the container
+// "default" instead.
 func defaultExport(ref model.Ref, sym model.Symbol) bool {
-	if ref.Container != "default" || model.LangFamily(ref.Lang) != "js" {
+	if model.LangFamily(ref.Lang) != "js" {
 		return false
 	}
 	if ref.Qualifier == "" {
-		return sym.Container == ""
+		return (ref.DefaultExport || ref.Container == "default") && sym.Container == ""
 	}
-	return sym.Container != "" && !strings.Contains(sym.Container, ".")
+	return ref.Container == "default" && sym.Container != "" && !strings.Contains(sym.Container, ".")
 }
 
 // lastSegment returns the last dot-separated segment of a container.

@@ -807,7 +807,11 @@ constructor of a class `X` (`constructor`, `__init__`), with the class's
 name, container and module standing in for the constructor's. When `X` is
 a default import, it is the importer's name for the module's default
 export, so `new X(...)` matches the constructor of any top-level class of
-that module, and still a top-level symbol named `X`.
+that module, and still a symbol named `X` as any `new X(...)` does. Such a
+ref keeps no container and is marked `defaultExport` instead, so gitlets
+that predate the mark still match it by its name. A footprint of version
+4 gave it the container `default` instead, which still reaches those
+constructors.
 
 ## 10. Rules
 

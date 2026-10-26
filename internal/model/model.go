@@ -191,9 +191,14 @@ type Ref struct {
 	// Config::new or a Go method expression) or a Rust inline module. It is
 	// "" when the qualifier names the module itself, or there is none. In
 	// JavaScript, "default" stands for the module's default export, whose
-	// own name the importer cannot see; an unqualified `new X()` through a
-	// default import carries it too.
+	// own name the importer cannot see.
 	Container string `json:"container,omitempty"`
+
+	// DefaultExport is set on a resolved JavaScript `new X()` whose X is a
+	// default import: the importer's name for the module's default export,
+	// which need not be the class's own. Container stays "", so gitlets
+	// that predate the field still match X by name.
+	DefaultExport bool `json:"defaultExport,omitempty"`
 
 	// Receiver is set by an extractor when the qualifier is the value a
 	// method is called on and the language tells it apart from a path, as

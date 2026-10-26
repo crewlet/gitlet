@@ -19,7 +19,7 @@ type resolveCase struct {
 	kind     model.RefKind
 	receiver bool // the qualifier is a method call's receiver (model.Ref.Receiver)
 	goModule GoModule
-	want     string // "name module" ("Container.name module"), "name ?" when unresolved, "" when dropped
+	want     string // "name module" ("Container.name module"; ", default export" after it when DefaultExport is set), "name ?" when unresolved, "" when dropped
 }
 
 func ns(local, module string) symbols.Import {
@@ -86,6 +86,9 @@ func runResolveCases(t *testing.T, tests []resolveCase) {
 					got = "unresolved with module " + r.Module + " in " + r.Container
 				default:
 					got = r.Name + " ?"
+				}
+				if r.DefaultExport {
+					got += ", default export"
 				}
 				if r.Line != 3 || r.Path != tt.path || r.Qualifier != q || r.Kind != kind || r.Receiver {
 					t.Errorf("ref fields changed: %+v", r)
@@ -157,8 +160,8 @@ func TestResolveTypeScript(t *testing.T) {
 		{name: "aliased named import uses the imported name", path: file, ref: "lc", imports: []symbols.Import{nm("lc", "loadConfig", "../lib/config")}, want: "loadConfig src/lib/config"},
 		{name: "default import", path: file, ref: "Cfg", imports: []symbols.Import{dflt("Cfg", "./cfg")}, want: "Cfg src/app/cfg"},
 		{name: "default as a named import keeps the local name", path: file, ref: "Cfg", imports: []symbols.Import{nm("Cfg", "default", "./cfg")}, want: "Cfg src/app/cfg"},
-		{name: "new of a default import builds the default export", path: file, ref: "Cfg", kind: model.RefConstruct, imports: []symbols.Import{dflt("Cfg", "./cfg")}, want: "default.Cfg src/app/cfg"},
-		{name: "new of default as a named import builds the default export", path: file, ref: "Cfg", kind: model.RefConstruct, imports: []symbols.Import{nm("Cfg", "default", "./cfg")}, want: "default.Cfg src/app/cfg"},
+		{name: "new of a default import builds the default export", path: file, ref: "Cfg", kind: model.RefConstruct, imports: []symbols.Import{dflt("Cfg", "./cfg")}, want: "Cfg src/app/cfg, default export"},
+		{name: "new of default as a named import builds the default export", path: file, ref: "Cfg", kind: model.RefConstruct, imports: []symbols.Import{nm("Cfg", "default", "./cfg")}, want: "Cfg src/app/cfg, default export"},
 		{name: "new of an aliased named import uses the imported name", path: file, ref: "C", kind: model.RefConstruct, imports: []symbols.Import{nm("C", "Config", "./cfg")}, want: "Config src/app/cfg"},
 		{name: "specifier with an extension", path: file, ref: "u", imports: []symbols.Import{nm("u", "u", "./util.js")}, want: "u src/app/util"},
 		{name: "directory specifier", path: file, ref: "x", imports: []symbols.Import{nm("x", "x", ".")}, want: "x src/app"},

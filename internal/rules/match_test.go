@@ -43,7 +43,7 @@ func TestMatch(t *testing.T) {
 		return r
 	}
 	newDefault := func(r model.Ref) model.Ref { // new X() of a default import
-		r.Kind, r.Container = model.RefConstruct, "default"
+		r.Kind, r.DefaultExport = model.RefConstruct, true
 		return r
 	}
 	tsClass := fn("typescript", "src/config.ts", "Config", "class Config")
@@ -144,9 +144,10 @@ func TestMatch(t *testing.T) {
 		{"ts new of a default import does not reach a member of its name", newDefault(ref("load", "typescript", "src/app.ts", 1, "src/config")), tsMethod, true, false, false},
 		{"ts new of a default import does not reach a class in a namespace", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/config")), nsCtor, false, false, false},
 		{"ts new of a default import in another module", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/other")), tsCtor, false, false, false},
-		{"ts new of a class through a default import", newDefault(typed(ref("Inner", "typescript", "src/app.ts", 1, "src/config"), "Cfg", "default")),
+		{"ts new of a default import from a version 4 footprint", construct(typed(ref("Cfg", "typescript", "src/app.ts", 1, "src/config"), "", "default")), tsCtor, false, true, true},
+		{"ts new of a class through a default import", construct(typed(ref("Inner", "typescript", "src/app.ts", 1, "src/config"), "Cfg", "default")),
 			fn("typescript", "src/config.ts", "Config.Inner.constructor", "constructor()"), false, true, true},
-		{"ts new of a class through a default import does not reach another class", newDefault(typed(ref("Inner", "typescript", "src/app.ts", 1, "src/config"), "Cfg", "default")),
+		{"ts new of a class through a default import does not reach another class", construct(typed(ref("Inner", "typescript", "src/app.ts", 1, "src/config"), "Cfg", "default")),
 			fn("typescript", "src/config.ts", "Config.Other.constructor", "constructor()"), false, false, false},
 		{"python call of the class reaches __init__", ref("Config", "python", "pkg/app.py", 1, "pkg/config"), pyCtor, false, true, true},
 		{"python call through a module", typed(ref("Config", "python", "pkg/app.py", 1, "pkg/config"), "config", ""), pyCtor, false, true, true},
@@ -165,6 +166,27 @@ func TestMatch(t *testing.T) {
 				t.Fatalf("Match = (%t, %t), want (%t, %t)", m, r, tt.match, tt.resolve)
 			}
 		})
+	}
+}
+
+// A `new Config()` through a default import keeps no container and is
+// marked DefaultExport. Gitlets that predate the mark read it as a plain
+// `new Config()`, so they still match the class of its name and its
+// constructor, as they did before default imports were told apart.
+func TestMatchDefaultExportReadWithoutTheMark(t *testing.T) {
+	ctor := fn("typescript", "src/config.ts", "Config.constructor", "constructor(string)")
+	class := fn("typescript", "src/config.ts", "Config", "class Config")
+	class.Kind = "class"
+	published := model.Ref{Name: "Config", Kind: model.RefConstruct, Lang: "typescript", Path: "src/app.ts", Line: 2,
+		Module: "src/config", Resolved: true, DefaultExport: true}
+	older := published
+	older.DefaultExport = false // what a gitlet without the field decodes
+	for _, r := range []model.Ref{published, older} {
+		for _, sym := range []model.Symbol{ctor, class} {
+			if m, res := Match(r, containerVersion, sym, false); !m || !res {
+				t.Errorf("Match(%+v, %s) = (%t, %t), want (true, true)", r, sym.Qualified, m, res)
+			}
+		}
 	}
 }
 
