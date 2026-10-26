@@ -187,7 +187,7 @@ func (e *Engine) syncItems(ctx context.Context, main string, mayOpen bool) error
 				ups = append(ups, u)
 			}
 		}
-	} else if ai < 0 && mayOpen && e.snap.Commit != "" && e.snap.Tree != mainTree && !e.readOnly() {
+	} else if ai < 0 && mayOpen && e.snap.Commit != "" && e.snap.Tree != mainTree && !e.readOnly() && !e.onSubmittedBranch(ctx, st.Items) {
 		it := e.provisionalItem(ctx, main)
 		opened, wipFor = &it, it.ID
 	}
@@ -260,6 +260,16 @@ func (e *Engine) syncItems(ctx context.Context, main string, mayOpen bool) error
 		}
 	}
 	return err
+}
+
+// onSubmittedBranch reports whether the worktree is on the branch of a
+// submitted item: work there is a review fix, which the submitted item
+// follows (submittedUpdate), not a new provisional item.
+func (e *Engine) onSubmittedBranch(ctx context.Context, items []model.WorkItem) bool {
+	branch, _ := e.bg.CurrentBranch(ctx)
+	return branch != "" && slices.ContainsFunc(items, func(it model.WorkItem) bool {
+		return it.Status == model.ItemSubmitted && it.Branch == branch
+	})
 }
 
 // activeUpdate computes the active item's snapshot, base (merge base of the

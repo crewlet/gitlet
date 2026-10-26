@@ -1313,15 +1313,22 @@ func (e *Engine) discussOption(ctx context.Context, key, note, label string) []m
 	return nil
 }
 
-// discussAbout returns what a discuss option about a symbol names: its
-// signature thread when one exists, else the note the call acts on, else my
-// most urgent open note about the symbol that offers discussion. "" when
-// there is none.
+// discussAbout returns what a discuss option about a symbol names: an
+// unsettled thread about it (a signature thread first), else the note the
+// call acts on, else my most urgent open note about the symbol that offers
+// discussion. "" when there is none.
 func (e *Engine) discussAbout(ctx context.Context, key, note string) string {
+	var open []model.ThreadState
 	for _, t := range e.threads(ctx) {
-		if t.Kind == model.ThreadSignature && t.Subject == key {
-			return t.ID
+		if t.Subject == key && !t.Settled {
+			open = append(open, t)
 		}
+	}
+	sort.SliceStable(open, func(i, j int) bool {
+		return open[i].Kind == model.ThreadSignature && open[j].Kind != model.ThreadSignature
+	})
+	if len(open) > 0 {
+		return open[0].ID
 	}
 	if note != "" {
 		if sn, err := e.notes.Note(ctx, e.me.ID, note); err == nil {
