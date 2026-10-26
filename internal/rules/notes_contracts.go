@@ -195,7 +195,7 @@ func (c *ctx) diverged(m *entry) {
 			against, fact, what = ct.Signature, "contract:"+ct.SigHash, "your published contract"
 		} else {
 			p := c.agreementOn(k)
-			if p == nil || p.Owner != c.v.Me || p.Signature == "" || sameSignature(cur, p.Signature) {
+			if p == nil || p.Owner != c.v.Me || p.Signature == "" || model.SameSignature(ch.Symbol.Lang, cur, p.Signature) {
 				continue
 			}
 			against, fact, what = p.Signature, "proposal:"+p.ID, "the agreed proposal"
@@ -218,18 +218,6 @@ func (c *ctx) diverged(m *entry) {
 		}
 		c.emit(n)
 	}
-}
-
-// sameSignature compares a declaration with a proposal's free-text
-// signature, ignoring whitespace and a trailing semicolon, and accepting a
-// proposal that leaves out the leading keyword or receiver
-// ("parseConfig(string): Config" for "function parseConfig(string): Config").
-func sameSignature(decl, proposal string) bool {
-	squash := func(s string) string {
-		return strings.TrimSuffix(strings.Join(strings.Fields(s), ""), ";")
-	}
-	a, b := squash(decl), squash(proposal)
-	return a == b || (b != "" && strings.HasSuffix(a, b)) || (a != "" && strings.HasSuffix(b, a))
 }
 
 // stillWaiting: I have needed a symbol for longer than PublishTimeout and

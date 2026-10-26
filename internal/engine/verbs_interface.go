@@ -436,7 +436,7 @@ func (e *Engine) doPublish(ctx context.Context, in api.PublishInput) (*api.Reply
 	}
 	if p, from, ok := e.agreedProposal(ctx, sym.Key, view.Claim.Epoch); ok && p.Signature != "" {
 		r.Data.ProposalSignature = p.Signature
-		if !sameSignatureText(contract.Signature, p.Signature) {
+		if !model.SameSignature(cur.Lang, contract.Signature, p.Signature) {
 			agreed := p.Signature
 			if from != e.me.ID {
 				agreed = quoteLine(from, p.Signature)
@@ -721,18 +721,6 @@ func (e *Engine) threadAgreement(thread string) (model.Proposal, model.AgentID, 
 		}
 	}
 	return model.Proposal{}, "", false
-}
-
-// sameSignatureText compares a declaration with a proposal's free-text
-// signature loosely, as the diverged rule does: whitespace and a trailing
-// semicolon do not count, and either may leave out a leading part such as
-// the keyword or receiver.
-func sameSignatureText(decl, proposal string) bool {
-	squash := func(s string) string {
-		return strings.TrimSuffix(strings.Join(strings.Fields(s), ""), ";")
-	}
-	a, b := squash(decl), squash(proposal)
-	return a == b || (b != "" && strings.HasSuffix(a, b)) || (a != "" && strings.HasSuffix(b, a))
 }
 
 // ---- need ----

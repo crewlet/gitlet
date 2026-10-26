@@ -147,6 +147,8 @@ func TestDivergedFromProposal(t *testing.T) {
 	}
 	runSev(t, model.NoteDiverged, []sevCase{
 		{"matches loosely", agreed("parseConfig(string,  boolean): Config").v, ""},
+		{"matches with parameter names", agreed("function parseConfig(text: string, strict: boolean): Config;").v, ""},
+		{"optional where mine is required", agreed("parseConfig(text: string, strict?: boolean): Config").v, model.SeverityAct},
 		{"differs", agreed("parseConfig(string, Options): Config").v, model.SeverityAct},
 		// Bob recorded his need: the clash and its thread are gone, the
 		// agreement in the messages still counts.
