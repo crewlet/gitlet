@@ -369,7 +369,8 @@ The server's instructions summarize the workflow in section 13.
   no longer exist are deleted.
 - **Outside branches**: every `gitlet.outsideInterval` (5m), a fetch of
   `+refs/heads/*:refs/gitlet-heads/<remote>/*` without `--prune` feeds
-  `outside_branch`.
+  `outside_branch`. These copies can outlive a branch deleted on the remote,
+  so they never count as what the remote has (section 9.1).
 - **One fetch at a time per clone.** Fetches hold `<common>/gitlet/fetch.lock`.
   A process that finds a fetch newer than 5 s reuses its result.
 - **Tool calls never wait long.** When the last successful fetch is older than
@@ -546,12 +547,16 @@ main.
   `credentials*`, `secrets.*`, plus any file over `gitlet.maxSnapshotFile`
   (5 MiB), tracked or not.
 - **Unpushed commits.** A snapshot's parent is HEAD, so pushing it also sends
-  every commit the remote lacks (not reachable from `refs/remotes/<remote>/*`
-  or gitlet's copies of the remote's refs). When those commits hold a denied
-  or oversized file (`git add -A && git commit` caught a `.env.local`), the
-  snapshot is not pushed: the item gets `snapshotError` naming the files and
-  its footprint is still published. Once those commits are pushed or
-  rewritten, the next snapshot of a changed work tree is published.
+  every commit the remote lacks (not reachable from `refs/remotes/<remote>/*`,
+  `refs/gitlet-main/<remote>` or `refs/gitlet-remote/<remote>/*`). gitlet's
+  copies of outside branches do not count: nothing prunes them (section 6.2),
+  so they can still hold commits that a branch deleted or rewritten on the
+  remote took away, for example to drop a leaked secret. When the commits the
+  push would send hold a denied or oversized file (`git add -A && git commit`
+  caught a `.env.local`), the snapshot is not pushed: the item gets
+  `snapshotError` naming the files and its footprint is still published.
+  Once those commits are pushed or rewritten, the next snapshot of a changed
+  work tree is published.
 - `gitlet.publishSnapshots=false` keeps wip refs local. Footprints are still
   published, and conflict prediction then covers only peers on the same
   machine.

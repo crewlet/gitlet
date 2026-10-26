@@ -161,6 +161,12 @@ func (b *Bus) writeWip(ctx context.Context, item model.ItemID, commit string) er
 // the remote had declined the push. The check is local, so it runs whether
 // or not the remote is reachable, and Flush only ever pushes a snapshot
 // that passed it. Without a remote nothing leaves the machine.
+//
+// The copies of outside branches (refs/gitlet-heads/<remote>/) do not
+// count as published: the outside fetch never prunes them and runs only
+// every outside interval, so they can still name commits a branch deleted
+// or rewritten on the remote took away. No local branch is built from
+// them, so leaving them out costs at most a refused snapshot.
 func (b *Bus) checkUnpushed(ctx context.Context, ref, commit string) error {
 	if b.remoteName == "" {
 		return nil
@@ -168,7 +174,6 @@ func (b *Bus) checkUnpushed(ctx context.Context, ref, commit string) error {
 	published := []string{
 		"refs/remotes/" + b.remoteName + "/",
 		mainPrefix + b.remoteName,
-		headsPrefix + b.remoteName + "/",
 		remotePrefix + b.remoteName + "/",
 	}
 	paths, err := b.repo.PushExcluded(ctx, commit, published, b.maxSnap)

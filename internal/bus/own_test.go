@@ -315,6 +315,13 @@ func TestWriteWipRefusesUnpushedExcludedFiles(t *testing.T) {
 		t.Fatal("the refused snapshot was written or pushed")
 	}
 
+	// gitlet's copies of outside branches are never pruned, so they may
+	// name commits the remote no longer has and vouch for nothing.
+	repo.setRef("refs/gitlet-heads/origin/feature", big)
+	if err := b.WriteWip(ctx, itemA, snap); !errors.As(err, &rej) {
+		t.Fatalf("WriteWip with the commits only in an outside branch copy: %v, want a RejectedError", err)
+	}
+
 	// Once those commits are on the remote, the snapshot is pushed.
 	repo.setRef("refs/remotes/origin/feature", big)
 	mustNoErr(t, b.WriteWip(ctx, itemA, snap))

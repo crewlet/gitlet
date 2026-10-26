@@ -285,6 +285,42 @@ func TestGitWipKeepsUnpushedSecretsLocal(t *testing.T) {
 	}
 }
 
+// TestGitWipIgnoresDeletedOutsideBranch: a branch deleted on the remote, for
+// example to drop a leaked secret, lives on in gitlet's unpruned copy of
+// the outside branches, which must not vouch for its commits.
+func TestGitWipIgnoresDeletedOutsideBranch(t *testing.T) {
+	ctx := context.Background()
+	g := newGitEnv(t)
+	repo := g.clone("a")
+	a := g.bus(repo, agentA)
+	git(t, repo.Root, "switch", "-q", "-c", "oops")
+	must(t, os.WriteFile(filepath.Join(repo.Root, ".env"), []byte("SECRET=1\n"), 0o644))
+	git(t, repo.Root, "add", "-A")
+	git(t, repo.Root, "commit", "-q", "-m", "oops")
+	leak := git(t, repo.Root, "rev-parse", "HEAD")
+	git(t, repo.Root, "push", "-q", "origin", "oops")
+	_, err := a.FetchOutside(ctx, 0, 0)
+	must(t, err)
+	git(t, repo.Root, "push", "-q", "origin", "--delete", "oops")
+	git(t, g.remote, "gc", "-q", "--prune=now")
+	if exec.Command("git", "-C", g.remote, "cat-file", "-e", leak).Run() == nil {
+		t.Fatal("setup: the deleted branch's commit is still on the remote")
+	}
+	if got, _ := repo.RevParse(ctx, "refs/gitlet-heads/origin/oops"); got != leak {
+		t.Fatalf("setup: refs/gitlet-heads/origin/oops = %q, want the deleted branch's %q", got, leak)
+	}
+
+	snap, err := repo.Snapshot(ctx, gitx.SnapshotOptions{Parent: leak, Message: "gitlet: snapshot"})
+	must(t, err)
+	var rej *RejectedError
+	if err := a.WriteWip(ctx, itemA, snap.Commit); !errors.As(err, &rej) || !strings.Contains(rej.Reason, ".env") {
+		t.Fatalf("WriteWip: %v, want a RejectedError naming .env", err)
+	}
+	if exec.Command("git", "-C", g.remote, "cat-file", "-e", leak).Run() == nil {
+		t.Fatal("the commit holding .env reached the remote again")
+	}
+}
+
 // TestGitRejectedWipNotFlushed: a snapshot a pre-receive hook declined is
 // not pushed again by later flushes.
 func TestGitRejectedWipNotFlushed(t *testing.T) {
