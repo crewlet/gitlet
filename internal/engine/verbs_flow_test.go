@@ -1506,6 +1506,63 @@ func TestFlowStartLeavesAFinishedBranchAfterCleanup(t *testing.T) {
 	}
 }
 
+// A task that landed by a merge leaves its head on main, so a branch made
+// again from main under the same name holds that head too: it is still a
+// branch like any other, while the landed branch itself is not.
+func TestFlowStartStaysOnABranchRemadeAfterAMerge(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+
+	item, branch := flowStart(t, ctx, ea, "Make Default use gitlet.json")
+	head := flowCommit(t, f.a, "default: use gitlet.json", "default.go", strings.Replace(mainGo, "gitlet.toml", "gitlet.json", 1))
+	runGit(t, f.a, "push", "-q", "origin", branch)
+	flowLocked(ea, func() {
+		_, err := ea.mutateState(ctx, func(st *model.AgentState) error {
+			i := itemIndex(st.Items, item)
+			st.Items[i].Status, st.Items[i].Head = model.ItemSubmitted, head
+			return nil
+		})
+		must(t, err)
+	})
+	runGit(t, f.b, "fetch", "-q", "origin", branch)
+	runGit(t, f.b, "merge", "-q", "--no-ff", "-m", "Merge pull request #1", "FETCH_HEAD")
+	runGit(t, f.b, "push", "-q", "origin", "main")
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	flowLocked(ea, func() {
+		if _, it, _ := ea.findItem(item); it.Status != model.ItemLanded {
+			t.Fatalf("item after the merge: %s", it.Status)
+		}
+	})
+
+	// The landed branch, still at its head, is left for one from main.
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Document the configuration"})
+	must(t, err)
+	flowWant(t, "start on the landed branch", r.Result, api.OK)
+	if !r.Data.NewBranch || r.Data.Branch == branch {
+		t.Fatalf("start on the landed %s: branch %q (new %v)", branch, r.Data.Branch, r.Data.NewBranch)
+	}
+	ab, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+
+	runGit(t, f.a, "switch", "-q", "main")
+	runGit(t, f.a, "pull", "-q", "--ff-only", "origin", "main")
+	runGit(t, f.a, "branch", "-D", branch)
+	runGit(t, f.a, "switch", "-q", "-c", branch)
+	work := flowCommit(t, f.a, "readme: other work", "README.md", "# demo\n\nOther work.\n")
+	clk.Advance(time.Minute)
+	r, err = ea.Start(ctx, api.StartInput{Intent: "Other work on a reused name"})
+	must(t, err)
+	flowWant(t, "start on the remade branch", r.Result, api.OK)
+	if got := runGit(t, f.a, "rev-parse", "HEAD"); r.Data.NewBranch || r.Data.Branch != branch || got != work {
+		t.Errorf("start on the remade %s: branch %q (new %v) at %s, want to stay at %s; details %v", branch, r.Data.Branch, r.Data.NewBranch, got, work, r.Details)
+	}
+}
+
 // Work on a finished task's branch opens no provisional item, and a
 // provisional item that followed the worktree there does not keep start
 // there either, after the task has left my state too.

@@ -106,7 +106,7 @@ func (e *Engine) doStart(ctx context.Context, in api.StartInput) (*api.Reply[api
 			} else {
 				fromName += " " + shortOID(from)
 			}
-			if refusal, err := e.carryRefusal(ctx, left, from, intent, in.Branch); err != nil || refusal != nil {
+			if refusal, err := e.carryRefusal(ctx, left.Item, from, intent, in.Branch); err != nil || refusal != nil {
 				if refusal != nil {
 					return reply(*refusal, none), nil
 				}
@@ -122,7 +122,7 @@ func (e *Engine) doStart(ctx context.Context, in api.StartInput) (*api.Reply[api
 		branch, newBranch = name, true
 		if leaving {
 			details = append(details, fmt.Sprintf("the new branch starts from %s: %s stays with your %s task %q%s",
-				fromName, cur, left.Status, left.Intent, prSuffix(left.PR)))
+				fromName, cur, left.Item.Status, left.Item.Intent, prSuffix(left.Item.PR)))
 		}
 	} else if b := strings.TrimSpace(in.Branch); b != "" && b != cur {
 		details = append(details, fmt.Sprintf("stayed on branch %s: a branch is only created on %s or a detached HEAD", cur, e.cfg.Main))
@@ -215,42 +215,81 @@ func (e *Engine) activeRefusal(it model.WorkItem) api.Result {
 
 // finishedBranchItem returns my item on branch that is no longer active
 // (submitted, landed or abandoned), preferring a submitted one. A new task
-// never stays on such a branch. Items closed long ago are no longer in my
-// state; the ledger remembers their branches (rememberFinished) for as long
-// as the branch still holds the commit it had then. A provisional item does
-// not count: gitlet opened it on its own for the branch the agent was on.
-func (e *Engine) finishedBranchItem(ctx context.Context, branch string) (model.WorkItem, bool) {
-	var found model.WorkItem
-	ok := false
+// never stays on such a branch. A closed item keeps its branch for as long
+// as the branch holds its work (holdsClosed), judged by the commit the
+// ledger recorded when it closed (rememberFinished), so a branch made again
+// under the same name is ordinary, and items closed so long ago that my
+// state no longer has them still count. Head is that commit, or "" for a
+// submitted item. A provisional item does not count: gitlet opened it on
+// its own for the branch the agent was on.
+func (e *Engine) finishedBranchItem(ctx context.Context, branch string) (finishedBranch, bool) {
 	if branch == "" || branch == e.cfg.Main {
-		return found, false
+		return finishedBranch{}, false
 	}
+	var closed *model.WorkItem
 	for _, it := range e.myState().Items {
-		if it.Branch == branch && it.Status != model.ItemActive && !it.Provisional && (!ok || it.Status.Open()) {
-			found, ok = it, true
+		if it.Branch != branch || it.Provisional {
+			continue
+		}
+		if it.Status == model.ItemSubmitted {
+			return finishedBranch{Item: it}, true
+		}
+		if !it.Status.Open() && closed == nil {
+			closed = &it
 		}
 	}
-	if ok {
-		return found, true
+	if f, ok := e.finishedRecord(ctx, branch); ok {
+		return f, e.holdsClosed(ctx, branch, f.Head)
 	}
-	v, have, err := e.led.Get(ctx, e.finishedKey(branch))
-	if err != nil || !have {
-		return found, false
+	if closed != nil {
+		return finishedBranch{Item: *closed}, true // unrecorded: by name alone
 	}
-	var f finishedBranch
-	if json.Unmarshal([]byte(v), &f) != nil || f.Head == "" {
-		return found, false
+	return finishedBranch{}, false
+}
+
+// holdsClosed reports whether branch still holds the work of an item that
+// closed with the branch at head: the branch is at head, or builds on head
+// while main does not contain it. Once main contains head (the item landed
+// by a merge or a fast-forward), a branch made again from main contains it
+// too, and commits on top of it no longer feed anything main lacks, so only
+// head itself counts.
+func (e *Engine) holdsClosed(ctx context.Context, branch, head string) bool {
+	tip, err := e.bg.RevParse(ctx, "refs/heads/"+branch)
+	if err != nil {
+		return false
 	}
-	if held, err := e.repo.IsAncestor(ctx, f.Head, "refs/heads/"+branch); err != nil || !held {
-		return found, false // the branch was made again for other work
+	if tip == head {
+		return true
 	}
-	return f.Item, true
+	if ok, err := e.bg.IsAncestor(ctx, head, tip); err != nil || !ok {
+		return false // the branch was made again for other work
+	}
+	main := e.mainOID(ctx)
+	if main == "" {
+		return true
+	}
+	inMain, err := e.bg.IsAncestor(ctx, head, main)
+	return err != nil || !inMain
 }
 
 // finishedBranch is what the ledger remembers about a closed item's branch.
 type finishedBranch struct {
 	Item model.WorkItem `json:"item"` // id, intent, branch, status and PR only
 	Head string         `json:"head"` // the branch's commit when the item closed
+}
+
+// finishedRecord returns what the ledger remembers about branch: the last
+// item that closed on it.
+func (e *Engine) finishedRecord(ctx context.Context, branch string) (finishedBranch, bool) {
+	v, have, err := e.led.Get(ctx, e.finishedKey(branch))
+	if err != nil || !have {
+		return finishedBranch{}, false
+	}
+	var f finishedBranch
+	if json.Unmarshal([]byte(v), &f) != nil || f.Head == "" {
+		return finishedBranch{}, false
+	}
+	return f, true
 }
 
 func (e *Engine) finishedKey(branch string) string {
