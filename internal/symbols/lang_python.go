@@ -156,9 +156,9 @@ func pyMergeOverloads(stubs []Def, impl *Def) Def {
 		sigs[i] = s.Signature
 	}
 	d.Signature = strings.Join(sigs, " | ")
-	d.Params, d.Results = nil, ""
+	d.Params, d.Results, d.Head = nil, "", ""
 	if len(stubs) == 1 {
-		d.Params, d.Results = stubs[0].Params, stubs[0].Results
+		d.Params, d.Results, d.Head = stubs[0].Params, stubs[0].Results, stubs[0].Head
 	}
 	return d
 }
@@ -213,7 +213,8 @@ func (p *pyFile) class(node, cls *sitter.Node, container string, containerExport
 		}
 	}
 	members, fields := p.members(stmts)
-	sig := "class " + qualified + p.b.Norm(Field(cls, "type_parameters")) + p.bases(Field(cls, "superclasses"))
+	head := "class " + qualified + p.b.Norm(Field(cls, "type_parameters")) + p.bases(Field(cls, "superclasses"))
+	sig := head
 	if len(fields) > 0 {
 		sig += " {" + strings.Join(fields, "; ") + "}"
 	}
@@ -224,6 +225,7 @@ func (p *pyFile) class(node, cls *sitter.Node, container string, containerExport
 		Kind:      "class",
 		Exported:  exported,
 		Signature: sig,
+		Head:      head,
 		Members:   members,
 		Nested:    nested,
 	})
@@ -319,12 +321,14 @@ func (p *pyFile) function(node, fn *sitter.Node, container string, classExported
 	}
 	words = append(words, "def", pyJoin(container, name)+p.b.Norm(Field(fn, "type_parameters")))
 	sig := strings.Join(words, " ")
+	d.Head = sig
 
 	// Getters and deleters are used as attributes: no parameter list.
 	if marker != "property" && marker != "deleter" {
 		dropFirst := container != "" && marker != "staticmethod"
 		list, params := p.params(Field(fn, "parameters"), dropFirst, marker == "setter")
 		sig += "(" + list + ")"
+		d.Head += "()"
 		d.Params = params
 	}
 	if r := Field(fn, "return_type"); r != nil {

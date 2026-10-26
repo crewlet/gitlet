@@ -100,9 +100,11 @@ func rsFunction(b *builder, n *sitter.Node, module string) {
 	}
 	vis := rsVisibility(b, n)
 	f := rsFnParts(b, n)
+	shown := rsWords(vis, f.mods, "fn") + " " + name
 	b.Add(Def{
 		Node: n, Name: name, Container: module, Kind: "function", Exported: vis == "pub",
-		Signature: rsWords(vis, f.mods, "fn") + " " + name + f.shape(),
+		Signature: shown + f.shape(),
+		Head:      shown + f.head(),
 		Params:    f.params, Results: f.results,
 	})
 }
@@ -119,7 +121,9 @@ func rsStruct(b *builder, n *sitter.Node, module string) {
 	}
 	head := rsWords(vis, keyword) + " " + name + rsNorm(b, Field(n, "type_parameters"))
 	where := rsNorm(b, ChildOfKind(n, "where_clause"))
-	var sig string
+	// The head keeps the form of the field list, and the ".." that stands
+	// for private fields, which are not members.
+	var sig, shape string
 	var members []model.Member
 	switch body := Field(n, "body"); {
 	case body == nil:
@@ -127,15 +131,19 @@ func rsStruct(b *builder, n *sitter.Node, module string) {
 	case body.Kind() == "ordered_field_declaration_list":
 		var fields string
 		fields, members = rsTupleFields(b, body, false)
-		sig = rsWords(head+"("+fields+")", where)
+		sig, shape = rsWords(head+"("+fields+")", where), rsWords(head+"()", where)
 	default:
 		var fields string
 		fields, members = rsFields(b, body, false)
-		sig = rsWords(head, where, "{"+fields+"}")
+		hidden := ""
+		if fields == ".." || strings.HasSuffix(fields, ", ..") {
+			hidden = ".."
+		}
+		sig, shape = rsWords(head, where, "{"+fields+"}"), rsWords(head, where, "{"+hidden+"}")
 	}
 	b.Add(Def{
 		Node: n, Name: name, Container: module, Kind: "struct", Exported: vis == "pub",
-		Signature: sig, Members: members,
+		Signature: sig, Head: shape, Members: members,
 	})
 }
 
@@ -253,9 +261,11 @@ func rsTrait(b *builder, n *sitter.Node, module string) {
 			items = append(items, rsWords(f.mods, "fn")+" "+iname+f.shape())
 			members = append(members, model.Member{Name: iname, Type: rsWords(f.mods, f.shape()), Method: true})
 			nested = append(nested, item)
+			shown := rsWords(f.mods, "fn") + " " + name + "::" + iname
 			methods = append(methods, Def{
 				Node: item, Name: iname, Container: container, Kind: "method", Exported: vis == "pub",
-				Signature: rsWords(f.mods, "fn") + " " + name + "::" + iname + f.shape(),
+				Signature: shown + f.shape(),
+				Head:      shown + f.head(),
 				Params:    f.params, Results: f.results,
 			})
 		case "associated_type", "type_item":
@@ -272,9 +282,11 @@ func rsTrait(b *builder, n *sitter.Node, module string) {
 	if bounds := Field(n, "bounds"); bounds != nil {
 		head += ": " + rsBounds(b, bounds)
 	}
+	where := rsNorm(b, ChildOfKind(n, "where_clause"))
 	b.Add(Def{
 		Node: n, Name: name, Container: module, Kind: "trait", Exported: vis == "pub",
-		Signature: rsWords(head, rsNorm(b, ChildOfKind(n, "where_clause")), "{"+strings.Join(items, "; ")+"}"),
+		Signature: rsWords(head, where, "{"+strings.Join(items, "; ")+"}"),
+		Head:      rsWords(head, where, "{}"),
 		Members:   members, Nested: nested,
 	})
 	for _, m := range methods {
@@ -356,6 +368,7 @@ func rsImpl(b *builder, n *sitter.Node, module string) {
 			f := rsFnParts(b, item)
 			d.Kind = "method"
 			d.Signature = rsWords(vis, f.mods, "fn") + " " + shown + f.shape()
+			d.Head = rsWords(vis, f.mods, "fn") + " " + shown + f.head()
 			d.Params, d.Results = f.params, f.results
 		case "const_item":
 			d.Kind = "const"
@@ -430,6 +443,7 @@ type rsFnShape struct {
 	mods     string   // "async", "const unsafe", `extern "C"`
 	generics string   // "<T:Clone>"
 	list     []string // the parameters as shown in the signature, self first
+	self     string   // the self parameter as shown, "" for none
 	params   []model.Param
 	results  string
 	where    string
@@ -445,6 +459,12 @@ func (f rsFnShape) shape() string {
 	return rsWords(s, f.where)
 }
 
+// head renders what shape shows besides params and results: "<T>(&self)
+// where T:Clone".
+func (f rsFnShape) head() string {
+	return rsWords(f.generics+"("+f.self+")", f.where)
+}
+
 // rsFnParts reads a function_item or function_signature_item. The self
 // parameter is part of the signature but not of params.
 func rsFnParts(b *builder, n *sitter.Node) rsFnShape {
@@ -458,11 +478,13 @@ func rsFnParts(b *builder, n *sitter.Node) rsFnShape {
 		switch p.Kind() {
 		case "attribute_item", "ERROR":
 		case "self_parameter":
-			f.list = append(f.list, rsSelf(b, p))
+			f.self = rsSelf(b, p)
+			f.list = append(f.list, f.self)
 		case "parameter":
 			typ := rsNorm(b, Field(p, "type"))
 			if pat := Field(p, "pattern"); pat != nil && pat.Kind() == "self" {
-				f.list = append(f.list, "self: "+typ) // self: Box<Self>
+				f.self = "self: " + typ // self: Box<Self>
+				f.list = append(f.list, f.self)
 				continue
 			}
 			f.list = append(f.list, typ)

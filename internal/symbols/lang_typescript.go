@@ -275,7 +275,7 @@ func (e *tsExtractor) function(d tsDecl, sc tsScope) {
 	e.defs = append(e.defs, tsDef{
 		Def: Def{
 			Node: d.outer, Name: name, Container: sc.container, Kind: "function", Exported: exported,
-			Signature: sig + rest, Params: params, Results: results,
+			Signature: sig + rest, Params: params, Results: results, Head: sig + e.callableHead(fn),
 		},
 		key:      "function\x00" + sc.container + "\x00" + name,
 		overload: fn.Kind() == "function_signature",
@@ -331,7 +331,8 @@ func (e *tsExtractor) variables(d tsDecl, sc tsScope) {
 			def.Signature = prefix + "const " + name + ": " + e.typ(t)
 		} else {
 			rest, params, results := e.callable(fn)
-			def.Signature = e.funcPrefix(exported, false, fn) + " " + name + rest
+			head := e.funcPrefix(exported, false, fn) + " " + name
+			def.Signature, def.Head = head+rest, head+e.callableHead(fn)
 			def.Params, def.Results = params, results
 		}
 		e.defs = append(e.defs, tsDef{Def: def, key: "function\x00" + sc.container + "\x00" + name})
@@ -405,11 +406,12 @@ func (e *tsExtractor) class(d tsDecl, sc tsScope) {
 			sb.WriteString(" extends " + e.typ(h))
 		}
 	}
+	head := sb.String()
 	sb.WriteString(" {" + strings.Join(props, "; ") + "}")
 
 	e.defs = append(e.defs, tsDef{Def: Def{
 		Node: d.outer, Name: name, Container: sc.container, Kind: "class", Exported: exported,
-		Signature: sb.String(), Members: members, Nested: nodes,
+		Signature: sb.String(), Head: head, Members: members, Nested: nodes,
 	}})
 	e.defs = append(e.defs, methods...)
 }
@@ -458,7 +460,7 @@ func (e *tsExtractor) method(m *sitter.Node, container string, classExported boo
 	rest, params, results := e.callable(m)
 	d := Def{
 		Node: m, Name: name, Container: container, Kind: "method", Exported: classExported && !private,
-		Signature: sb.String() + rest, Params: params, Results: results,
+		Signature: sb.String() + rest, Params: params, Results: results, Head: sb.String() + e.callableHead(m),
 	}
 	if accessor == "set" {
 		d.Suffix = "@set"
@@ -499,7 +501,8 @@ func (e *tsExtractor) fieldMethod(m, fn *sitter.Node, container string, classExp
 		prefix += "*"
 	}
 	rest, params, results := e.callable(fn)
-	d.Signature = prefix + container + "." + name + rest
+	head := prefix + container + "." + name
+	d.Signature, d.Head = head+rest, head+e.callableHead(fn)
 	d.Params, d.Results = params, results
 	return tsDef{Def: d}
 }
@@ -583,10 +586,11 @@ func (e *tsExtractor) iface(d tsDecl, sc tsScope) {
 	if ext := ChildOfKind(n, "extends_type_clause"); ext != nil {
 		sb.WriteString(" " + e.typ(ext))
 	}
+	head := sb.String()
 	sb.WriteString(" {" + strings.Join(texts, "; ") + "}")
 	e.defs = append(e.defs, tsDef{Def: Def{
 		Node: d.outer, Name: name, Container: sc.container, Kind: "interface", Exported: exported,
-		Signature: sb.String(), Members: members,
+		Signature: sb.String(), Head: head, Members: members,
 	}})
 }
 
@@ -598,17 +602,19 @@ func (e *tsExtractor) typeAlias(d tsDecl, sc tsScope) {
 	}
 	exported := e.isExported(d, sc, name)
 	value := Field(n, "value")
-	sig := "type " + name + e.typ(Field(n, "type_parameters")) + " = " + e.typ(value)
+	prefix := "type " + name + e.typ(Field(n, "type_parameters")) + " = "
 	if exported {
-		sig = "export " + sig
+		prefix = "export " + prefix
 	}
 	var members []model.Member
+	head := ""
 	if value != nil && value.Kind() == "object_type" {
 		_, members = e.objectMembers(value)
+		head = prefix + "{}"
 	}
 	e.defs = append(e.defs, tsDef{Def: Def{
 		Node: d.outer, Name: name, Container: sc.container, Kind: "type", Exported: exported,
-		Signature: sig, Members: members,
+		Signature: prefix + e.typ(value), Head: head, Members: members,
 	}})
 }
 
@@ -716,6 +722,18 @@ func (e *tsExtractor) callable(fn *sitter.Node) (string, []model.Param, string) 
 	return sig, params, results
 }
 
+// callableHead renders what callable shows besides the parameters and the
+// return type: the type parameters and a this parameter, "<T>(this: Foo)".
+func (e *tsExtractor) callableHead(fn *sitter.Node) string {
+	this := ""
+	for _, p := range Named(Field(fn, "parameters")) {
+		if text, _, isThis, ok := e.param(p); ok && isThis {
+			this = text
+		}
+	}
+	return e.typ(Field(fn, "type_parameters")) + "(" + this + ")"
+}
+
 func (e *tsExtractor) paramList(n *sitter.Node) ([]string, []model.Param) {
 	var texts []string
 	var params []model.Param
@@ -820,9 +838,9 @@ func tsMergeOverloads(defs []tsDef) []Def {
 			texts[k] = s.Signature
 		}
 		d.Signature = strings.Join(texts, " | ")
-		d.Params, d.Results = nil, ""
+		d.Params, d.Results, d.Head = nil, "", ""
 		if len(sigs) == 1 {
-			d.Params, d.Results = sigs[0].Params, sigs[0].Results
+			d.Params, d.Results, d.Head = sigs[0].Params, sigs[0].Results, sigs[0].Head
 		}
 		out = append(out, d)
 		i = j

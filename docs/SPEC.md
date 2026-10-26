@@ -652,6 +652,12 @@ required member added to a TypeScript interface, and every `removed` or
 `renamed` symbol. A `moved` symbol is breaking only when its module (9.6)
 changes.
 
+A change is compatible only when every difference is on the first list. An
+optional parameter appended together with any other difference, such as
+`async` or a generator added, a Python method marker changed, a type
+parameter's constraint or a Go receiver changed, or a class base replaced,
+is breaking.
+
 ### 9.5 References
 
 `refs` lists the references made from added or changed code (inside changed

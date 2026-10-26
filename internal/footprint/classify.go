@@ -1,6 +1,7 @@
 package footprint
 
 import (
+	"cmp"
 	"regexp"
 	"slices"
 	"strings"
@@ -9,13 +10,12 @@ import (
 )
 
 // classify compares the structured parts of two signatures (docs/SPEC.md,
-// section 9.4). A change is compatible only when every difference it can see
-// is an allowed one; when the signature hashes differ but the structured
-// fields show no difference at all (type parameters, async, receivers,
-// bases, overload groups), the change is breaking.
-//
-// Hidden differences that come together with an allowed one, such as a
-// changed receiver plus an added variadic parameter, cannot be seen.
+// section 9.4). A change is compatible only when every difference is an
+// allowed one: the structured fields (Params, Results, Members) may differ
+// only in allowed ways, and the rest of the signature, the Head (type
+// parameters, async, receivers, method markers, bases), only in visibility.
+// When the signature hashes differ but nothing structured explains it
+// (overload groups, a renamed receiver type), the change is breaking.
 func classify(old, new model.Symbol) bool {
 	if old.SigHash == new.SigHash {
 		return false
@@ -36,6 +36,9 @@ func classify(old, new model.Symbol) bool {
 	if !resultsOK || !paramsOK || !membersOK {
 		return true
 	}
+	if stripVisibility(head(old)) != stripVisibility(head(new)) {
+		return true // async, a receiver, a constraint or a base changed too
+	}
 	if resultsChanged || paramsChanged || membersChanged {
 		return false
 	}
@@ -46,6 +49,11 @@ func classify(old, new model.Symbol) bool {
 	}
 	return true
 }
+
+// head returns the part of s's signature the structured fields leave out.
+// Without a Head, as from an extractor that sets none, that is the whole
+// signature, so no change to the structured parts can pass for compatible.
+func head(s model.Symbol) string { return cmp.Or(s.Head, s.Signature) }
 
 // visibility ranks the visibility a symbol's signature shows, from 0 (most
 // private), where the language writes it there: Rust's pub forms, and

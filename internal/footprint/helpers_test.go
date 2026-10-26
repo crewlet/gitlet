@@ -1,6 +1,7 @@
 package footprint
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -137,6 +138,7 @@ type def struct {
 	q        string // qualified name: "name" or "Container.name"
 	kind     string
 	sig      string
+	head     string // the signature outside params, results and members; kind and name when empty
 	body     string
 	start    int
 	end      int
@@ -175,6 +177,7 @@ func mkSymbol(lang, path, src string, d def) model.Symbol {
 		Container: container,
 		Kind:      d.kind,
 		Signature: d.sig,
+		Head:      cmp.Or(d.head, d.kind+" "+d.q),
 		SigHash:   symbols.SigHash(d.kind + "|" + d.sig),
 		BodyHash:  symbols.BodyHash(d.body),
 		Params:    d.params,

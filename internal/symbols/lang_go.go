@@ -93,7 +93,7 @@ func goFunc(b *builder, n *sitter.Node) {
 		d.Kind, d.Container = "method", goBaseName(b, recv)
 		head = "func (" + goType(b, recv) + ") " + name
 	}
-	d.Signature = head + list + goSpaced(results)
+	d.Signature, d.Head = head+list+goSpaced(results), head
 	b.Add(d)
 }
 
@@ -131,11 +131,11 @@ func goTypeDecl(b *builder, decl *sitter.Node) {
 		case spec.Kind() == "type_alias":
 			d.Signature = head + " = " + goType(b, typ)
 		case goKind(inner) == "struct_type":
-			d.Kind = "struct"
-			d.Signature = head + " struct" + goBody(shape)
+			d.Kind, d.Head = "struct", head+" struct"
+			d.Signature = d.Head + goBody(shape)
 		case goKind(inner) == "interface_type":
-			d.Kind = "interface"
-			d.Signature = head + " interface" + goBody(shape)
+			d.Kind, d.Head = "interface", head+" interface"
+			d.Signature = d.Head + goBody(shape)
 		default:
 			d.Signature = head + " " + goType(b, typ)
 		}

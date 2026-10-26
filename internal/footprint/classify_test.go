@@ -14,6 +14,7 @@ type shape struct {
 	name      string // "f" when empty
 	container string
 	sig       string
+	head      string // the signature outside params, results and members; kind and name when empty
 	exported  bool
 	params    []model.Param
 	results   string
@@ -24,12 +25,16 @@ func (s shape) symbol() model.Symbol {
 	if s.name == "" {
 		s.name = "f"
 	}
+	if s.head == "" {
+		s.head = s.kind + " " + s.name
+	}
 	return model.Symbol{
 		Lang:      s.lang,
 		Kind:      s.kind,
 		Name:      s.name,
 		Container: s.container,
 		Signature: s.sig,
+		Head:      s.head,
 		SigHash:   symbols.SigHash(s.kind + "|" + s.sig),
 		Exported:  s.exported,
 		Params:    s.params,
@@ -67,6 +72,7 @@ func TestClassify(t *testing.T) {
 	withResults := func(s shape, r string) shape { s.results = r; return s }
 	withExported := func(s shape, e bool) shape { s.exported = e; return s }
 	withLang := func(s shape, l string) shape { s.lang = l; return s }
+	withHead := func(s shape, h string) shape { s.head = h; return s }
 
 	tests := []struct {
 		name     string
@@ -249,11 +255,176 @@ func TestClassify(t *testing.T) {
 			shape{lang: "go", kind: "method", name: "M", container: "T", sig: "func (T) M()"},
 			shape{lang: "go", kind: "method", name: "M", container: "U", sig: "func (U) M()"}, true},
 		{"language family changed", pyFn("def f()"), withLang(pyFn("fn f()"), "rust"), true},
+
+		// What the structured fields cannot see must stay as it was, even
+		// next to an allowed change.
+		{"go: receiver changed with a variadic appended",
+			shape{lang: "go", kind: "method", name: "M", container: "T", sig: "func (T) M(int)", head: "func (T) M", params: []model.Param{p("int")}, exported: true},
+			shape{lang: "go", kind: "method", name: "M", container: "T", sig: "func (*T) M(int, ...int)", head: "func (*T) M", params: []model.Param{p("int"), rest(p("int"))}, exported: true}, true},
+		{"go: type parameter constraint changed with a variadic appended",
+			withHead(goFn("func f[T any](T)", []model.Param{p("T")}, ""), "func f[T any]"),
+			withHead(goFn("func f[T comparable](T, ...int)", []model.Param{p("T"), rest(p("int"))}, ""), "func f[T comparable]"), true},
+		{"go: struct type parameters changed with a field added",
+			withHead(typ("go", "struct", "type T[E any] struct {A E}", field("A", "E")), "type T[E any] struct"),
+			withHead(typ("go", "struct", "type T[E comparable] struct {A E; B int}", field("A", "E"), field("B", "int")), "type T[E comparable] struct"), true},
+		{"ts: async added with an optional parameter",
+			withHead(tsFn("function f(string)", p("string")), "function f()"),
+			withHead(tsFn("async function f(string, object?)", p("string"), opt(p("object"))), "async function f()"), true},
+		{"ts: static added with an optional parameter",
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "C.m(string)", head: "C.m()", params: []model.Param{p("string")}, exported: true},
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "static C.m(string, number?)", head: "static C.m()", params: []model.Param{p("string"), opt(p("number"))}, exported: true}, true},
+		{"ts: class base changed with an optional field added",
+			withHead(typ("typescript", "class", "class T extends A {a: string}", field("a", "string")), "class T extends A"),
+			withHead(typ("typescript", "class", "class T extends B {a: string; b?: number}", field("a", "string"), optField("b", "number")), "class T extends B"), true},
+		{"ts: export added with an optional parameter",
+			withExported(withHead(tsFn("function f(string)", p("string")), "function f()"), false),
+			withHead(tsFn("export function f(string, number?)", p("string"), opt(p("number"))), "export function f()"), false},
+		{"py: async added with a defaulted parameter",
+			withHead(pyFn("def f(a)", named("a", "")), "def f()"),
+			withHead(pyFn("async def f(a, b=?)", named("a", ""), opt(named("b", ""))), "async def f()"), true},
+		{"py: property became a method with a defaulted parameter",
+			shape{lang: "python", kind: "method", name: "port", container: "C", sig: "property def C.port -> int", head: "property def C.port", results: "int", exported: true},
+			shape{lang: "python", kind: "method", name: "port", container: "C", sig: "def C.port(strict=?) -> int", head: "def C.port()",
+				params: []model.Param{opt(named("strict", ""))}, results: "int", exported: true}, true},
+		{"py: became a generator with a defaulted parameter",
+			withHead(pyFn("def f(n)", named("n", "")), "def f()"),
+			withHead(pyFn("generator def f(n, step=?)", named("n", ""), opt(named("step", ""))), "generator def f()"), true},
+		{"py: class base changed with an optional attribute added",
+			withHead(typ("python", "class", "class T(A) {a: int = ?}", optField("a", "int")), "class T(A)"),
+			withHead(typ("python", "class", "class T(B) {a: int = ?; b: int = ?}", optField("a", "int"), optField("b", "int")), "class T(B)"), true},
+		{"rust: supertrait added with items reordered",
+			withHead(typ("rust", "trait", "pub trait T {fn a(); fn b()}", method("a", "fn a()"), method("b", "fn b()")), "pub trait T {}"),
+			withHead(typ("rust", "trait", "pub trait T: Send {fn b(); fn a()}", method("b", "fn b()"), method("a", "fn a()")), "pub trait T: Send {}"), true},
+		{"a symbol without a head is compared by its whole signature",
+			shape{lang: "go", kind: "function", sig: "func f(int)", head: "-", params: []model.Param{p("int")}, exported: true},
+			shape{lang: "go", kind: "function", sig: "func f(int, ...int)", head: "-", params: []model.Param{p("int"), rest(p("int"))}, exported: true}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Classify(tt.old.symbol(), tt.new.symbol()); got != tt.want {
+			old, new := tt.old.symbol(), tt.new.symbol()
+			if old.Head == "-" {
+				old.Head, new.Head = "", ""
+			}
+			if got := Classify(old, new); got != tt.want {
 				t.Errorf("Classify = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClassifyExtracted classifies changes between real extractions, so the
+// signature parts each extractor leaves outside params, results and members
+// are covered.
+func TestClassifyExtracted(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		old, new  string
+		qualified string
+		want      bool
+	}{
+		// Hidden next to an allowed change.
+		{"js: async with a defaulted parameter", "a.js",
+			"export function load(path) {}\n", "export async function load(path, opts = {}) {}\n", "load", true},
+		{"ts: async with an optional parameter", "a.ts",
+			"export function load(path: string) { return 1 }\n", "export async function load(path: string, opts?: object) { return 1 }\n", "load", true},
+		{"ts: static with an optional parameter", "a.ts",
+			"export class C {\n  m(a: string) {}\n}\n", "export class C {\n  static m(a: string, b?: number) {}\n}\n", "C.m", true},
+		{"ts: this type with an optional parameter", "a.ts",
+			"export function f(this: A, x: string) {}\n", "export function f(this: B, x: string, y?: number) {}\n", "f", true},
+		{"ts: class base with an optional field", "a.ts",
+			"export class C extends A {\n  a?: string\n}\n", "export class C extends B {\n  a?: string\n  b?: number\n}\n", "C", true},
+		{"py: async with a defaulted parameter", "a.py",
+			"def load(path):\n    pass\n", "async def load(path, opts=None):\n    pass\n", "load", true},
+		{"py: property became a method with a defaulted parameter", "a.py",
+			"class C:\n    @property\n    def port(self) -> int:\n        return 1\n",
+			"class C:\n    def port(self, strict=False) -> int:\n        return 1\n", "C.port", true},
+		{"py: classmethod with a defaulted parameter", "a.py",
+			"class C:\n    def m(self, a):\n        pass\n", "class C:\n    @classmethod\n    def m(cls, a, b=None):\n        pass\n", "C.m", true},
+		{"py: generator with a defaulted parameter", "a.py",
+			"def gen(n):\n    return [n]\n", "def gen(n, step=1):\n    yield n\n", "gen", true},
+		{"py: class base with an optional attribute", "a.py",
+			"class C(A):\n    a: int = 1\n", "class C(B):\n    a: int = 1\n    b: int = 2\n", "C", true},
+		{"go: type parameter constraint with a variadic parameter", "a.go",
+			"package a\n\nfunc F[T any](x T) {}\n", "package a\n\nfunc F[T comparable](x T, o ...int) {}\n", "F", true},
+		{"go: pointer receiver with a variadic parameter", "a.go",
+			"package a\n\ntype T struct{}\n\nfunc (T) M(x int) {}\n", "package a\n\ntype T struct{}\n\nfunc (*T) M(x int, o ...int) {}\n", "T.M", true},
+		{"go: struct type parameters with a field", "a.go",
+			"package a\n\ntype L[T any] struct {\n\tA T\n}\n", "package a\n\ntype L[T comparable] struct {\n\tA T\n\tB int\n}\n", "L", true},
+		{"rust: supertrait with items reordered", "a.rs",
+			"pub trait T {\n    fn a();\n    fn b();\n}\n", "pub trait T: Send {\n    fn b();\n    fn a();\n}\n", "T", true},
+		{"rust: private field with fields reordered", "a.rs",
+			"pub struct S {\n    pub a: u8,\n    pub b: u8,\n}\n", "pub struct S {\n    pub b: u8,\n    pub a: u8,\n    c: u8,\n}\n", "S", true},
+
+		// Allowed changes alone stay compatible.
+		{"js: defaulted parameter", "a.js",
+			"export function load(path) {}\n", "export function load(path, opts = {}) {}\n", "load", false},
+		{"ts: optional parameter", "a.ts",
+			"export function load(path: string) {}\n", "export function load(path: string, opts?: object) {}\n", "load", false},
+		{"ts: optional parameter in a method", "a.ts",
+			"export class C {\n  private m(a: string) {}\n}\n", "export class C {\n  private m(a: string, b?: number) {}\n}\n", "C.m", false},
+		{"ts: optional parameter in a single overload", "a.ts",
+			"export function f(a: string): void;\nexport function f(a: any) {}\n",
+			"export function f(a: string, b?: number): void;\nexport function f(a: any, b?: any) {}\n", "f", false},
+		{"ts: interface optional member", "a.ts",
+			"export interface O {\n  a: string\n}\n", "export interface O {\n  a: string\n  b?: number\n}\n", "O", false},
+		{"ts: class optional field", "a.ts",
+			"export class C extends A {\n  a?: string\n}\n", "export class C extends A {\n  a?: string\n  b?: number\n}\n", "C", false},
+		{"ts: return annotation", "a.ts",
+			"export function f(a: string) { return a }\n", "export function f(a: string): string { return a }\n", "f", false},
+		{"ts: class field function optional parameter", "a.ts",
+			"export class C {\n  m = (a: string) => a\n}\n", "export class C {\n  m = (a: string, b?: number) => a\n}\n", "C.m", false},
+		{"ts: type literal member annotation", "a.ts",
+			"export type T = {\n  a\n}\n", "export type T = {\n  a: string\n}\n", "T", false},
+		{"ts: arrow function optional parameter", "a.ts",
+			"export const f = <T>(a: T) => a\n", "export const f = <T>(a: T, b?: number) => a\n", "f", false},
+		{"py: defaulted parameter", "a.py",
+			"def load(path):\n    pass\n", "def load(path, opts=None):\n    pass\n", "load", false},
+		{"py: async defaulted parameter", "a.py",
+			"async def load(path):\n    pass\n", "async def load(path, opts=None):\n    pass\n", "load", false},
+		{"py: property return annotation", "a.py",
+			"class C:\n    @property\n    def port(self):\n        return 1\n",
+			"class C:\n    @property\n    def port(self) -> int:\n        return 1\n", "C.port", false},
+		{"py: class optional attribute", "a.py",
+			"class C(A):\n    a: int = 1\n", "class C(A):\n    a: int = 1\n    b: int = 2\n", "C", false},
+		{"py: optional parameter in a single overload", "a.py",
+			"from typing import overload\n\n@overload\ndef f(a: int) -> int: ...\ndef f(a):\n    return a\n",
+			"from typing import overload\n\n@overload\ndef f(a: int, b: int = 0) -> int: ...\ndef f(a, b=0):\n    return a\n", "f", false},
+		{"go: variadic parameter", "a.go",
+			"package a\n\nfunc F(x int) {}\n", "package a\n\nfunc F(x int, o ...int) {}\n", "F", false},
+		{"go: variadic parameter in a method", "a.go",
+			"package a\n\ntype T struct{}\n\nfunc (t *T) M(x int) {}\n", "package a\n\ntype T struct{}\n\nfunc (t *T) M(x int, o ...int) {}\n", "T.M", false},
+		{"go: struct field", "a.go",
+			"package a\n\ntype L[T any] struct {\n\tA T\n}\n", "package a\n\ntype L[T any] struct {\n\tA T\n\tB int\n}\n", "L", false},
+		{"rust: trait items reordered", "a.rs",
+			"pub trait T: Send {\n    fn a();\n    fn b();\n}\n", "pub trait T: Send {\n    fn b();\n    fn a();\n}\n", "T", false},
+		{"rust: fields reordered", "a.rs",
+			"pub struct S {\n    pub a: u8,\n    pub b: u8,\n    c: u8,\n}\n", "pub struct S {\n    pub b: u8,\n    pub a: u8,\n    c: u8,\n}\n", "S", false},
+		{"rust: pub added", "a.rs", "fn f() {}\n", "pub fn f() {}\n", "f", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old, err := symbols.Extract(tt.path, []byte(tt.old))
+			if err != nil {
+				t.Fatal(err)
+			}
+			new, err := symbols.Extract(tt.path, []byte(tt.new))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var found bool
+			for _, c := range DiffSymbols(old, new) {
+				if c.Symbol.Qualified != tt.qualified {
+					continue
+				}
+				found = true
+				if c.Change != model.ChangeSignature || c.Breaking != tt.want {
+					t.Errorf("%s %s breaking=%v, want signature breaking=%v (%q -> %q)",
+						c.Symbol.Qualified, c.Change, c.Breaking, tt.want, c.OldSignature, c.Symbol.Signature)
+				}
+			}
+			if !found {
+				t.Errorf("no change to %s", tt.qualified)
 			}
 		})
 	}

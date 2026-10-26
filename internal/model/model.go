@@ -94,6 +94,14 @@ type Symbol struct {
 	StartByte int      `json:"startByte"`         // byte range of the whole definition
 	EndByte   int      `json:"endByte"`
 	Exported  bool     `json:"exported"`
+
+	// Head is the signature without the parts Params, Results and Members
+	// describe: kind words and method markers, async, the receiver, type
+	// parameters, bases and where clauses. Classifying a change compares it,
+	// so nothing outside the structured parts changes unseen (docs/SPEC.md,
+	// section 9.4). Extractors fill it; it is not stored, and an empty Head
+	// stands for the whole signature.
+	Head string `json:"-"`
 }
 
 // Ref returns the canonical human form "path:Qualified" used in tool arguments.

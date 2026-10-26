@@ -1,6 +1,7 @@
 package symbols
 
 import (
+	"cmp"
 	"fmt"
 	"path"
 	"sort"
@@ -145,6 +146,12 @@ type Def struct {
 	Params    []model.Param
 	Results   string
 	Members   []model.Member
+	// Head is Signature without the parts Params, Results and Members
+	// describe, with the same normalization: markers, async, receiver, type
+	// parameters, bases, where clauses. An allowed change to the structured
+	// parts is compatible only when Head stays the same. Empty means the
+	// whole signature.
+	Head string
 	// Nested are definitions inside Node (methods of a class, items of an
 	// impl). Their tokens are left out of this definition's body hash, so
 	// editing one method does not change its class.
@@ -174,6 +181,7 @@ func (b *builder) Add(d Def) model.Symbol {
 		Container: d.Container,
 		Kind:      d.Kind,
 		Signature: d.Signature,
+		Head:      cmp.Or(d.Head, d.Signature),
 		SigHash:   SigHash(d.Kind + "\x00" + d.Signature),
 		BodyHash:  BodyHash(b.bodyTokens(d.Node, d.Nested, d.Name)),
 		Params:    d.Params,
