@@ -233,11 +233,6 @@ func (e *Engine) finishedBranchItem(ctx context.Context, branch string) (model.W
 	if ok {
 		return found, true
 	}
-	for _, it := range e.myState().Items {
-		if it.Branch == branch && it.Status == model.ItemActive {
-			return found, false
-		}
-	}
 	v, have, err := e.led.Get(ctx, e.finishedKey(branch))
 	if err != nil || !have {
 		return found, false

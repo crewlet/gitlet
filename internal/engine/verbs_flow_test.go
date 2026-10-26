@@ -1506,6 +1506,64 @@ func TestFlowStartLeavesAFinishedBranchAfterCleanup(t *testing.T) {
 	}
 }
 
+// Work on a finished task's branch opens no provisional item, and a
+// provisional item that followed the worktree there does not keep start
+// there either, after the task has left my state too.
+func TestFlowStartLeavesAFinishedBranchWithWorkInProgress(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	main := runGit(t, f.a, "rev-parse", "origin/main")
+	active := func() (it model.WorkItem, ok bool) {
+		flowLocked(ea, func() { it, ok = ea.activeItem() })
+		return it, ok
+	}
+
+	task, old := flowStart(t, ctx, ea, "Rename the default configuration file")
+	flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+	ab, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+	writeFile(t, f.a, "README.md", "# demo\n\nedited\n")
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	_, err = ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	if it, ok := active(); ok {
+		t.Fatalf("an edit on the abandoned task's branch opened item %s on %s", it.ID, it.Branch)
+	}
+
+	// On another branch the edit opens a provisional item, whose state write
+	// trims the abandoned task; the item follows the worktree back.
+	clk.Advance(closedRetention + time.Hour)
+	runGit(t, f.a, "switch", "-q", "-c", "scratch", "main")
+	must(t, ea.Tick(ctx))
+	flowLocked(ea, func() {
+		if _, it, ok := ea.findItem(task); ok {
+			t.Fatalf("the abandoned task is still in state: %+v", it)
+		}
+	})
+	runGit(t, f.a, "switch", "-q", old)
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	prov, _ := active()
+	if !prov.Provisional || prov.Branch != old {
+		t.Fatalf("active item %+v, want a provisional one on %s", prov, old)
+	}
+
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Describe the demo in the README"})
+	must(t, err)
+	flowWant(t, "start", r.Result, api.OK)
+	if head := runGit(t, f.a, "rev-parse", "HEAD"); !r.Data.NewBranch || r.Data.Branch == old || head != main || !r.Data.Adopted || r.Data.Item.ID != prov.ID {
+		t.Fatalf("start on %s: branch %q (new %v, adopted %v) at %s, want a new branch at main %s", old, r.Data.Branch, r.Data.NewBranch, r.Data.Adopted, head, main)
+	}
+	if got := runGit(t, f.a, "status", "--porcelain"); !strings.Contains(got, "README.md") {
+		t.Errorf("the edit did not come along: %q", got)
+	}
+}
+
 // A provisional item is one gitlet opened for the branch the agent was on:
 // abandoning it does not make that branch a finished task's.
 func TestFlowStartStaysAfterAbandoningAProvisionalItem(t *testing.T) {

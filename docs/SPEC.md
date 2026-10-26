@@ -475,11 +475,15 @@ A work item is one task on one branch in one worktree.
   - commits on main from the last 7 days with similar subjects ("already
     done?").
 - **Implicit items.** When the work tree changes and no active item exists,
-  the next tick opens a provisional item. Its intent comes from the branch
-  name, and an `untitled` note asks the agent to call `start`. Calling `start`
-  adopts the provisional item instead of opening a second one. Duplicate
-  detection uses only footprint signals for provisional items. A provisional
-  item whose tree goes back to equal main is closed silently.
+  the next tick opens a provisional item, except on the branch of a
+  submitted or closed item of mine: work there is a review fix the submitted
+  item follows, or the next task's, which `start` moves to a branch of its
+  own. Its intent comes from the branch name, and an `untitled` note asks
+  the agent to call `start`. Calling `start` adopts the provisional item
+  instead of opening a second one, and takes it along when it leaves a
+  finished item's branch the provisional item followed the worktree to.
+  Duplicate detection uses only footprint signals for provisional items. A
+  provisional item whose tree goes back to equal main is closed silently.
 - **Landing** is judged by content, never by commit ancestry alone, so squash
   and rebase merges count. A submitted item has landed when any of these
   holds:
