@@ -116,13 +116,8 @@ func (e *Engine) limits() rules.Limits {
 func (e *Engine) peers(ctx context.Context, now time.Time) map[model.AgentID]rules.Peer {
 	out := map[model.AgentID]rules.Peer{}
 	for _, id := range e.peerIDs() {
-		st, hasState := e.shared.Agents[id]
-		var lp lapse
-		if hasState {
-			lp = e.refLapse(ctx, bus.StateRef(id), e.shared.Refs[bus.StateRef(id)], st.LeaseSeconds, now)
-		} else {
-			lp = e.refLapse(ctx, bus.OutboxRef(id), e.shared.Refs[bus.OutboxRef(id)], 0, now)
-		}
+		st := e.shared.Agents[id]
+		lp := e.peerLapse(ctx, id, now)
 		p := rules.Peer{State: st, Outbox: e.shared.Outboxes[id], Lapsed: lp.Lapsed}
 		if lp.Lapsed {
 			since := lp.Since
@@ -132,6 +127,18 @@ func (e *Engine) peers(ctx context.Context, now time.Time) map[model.AgentID]rul
 		out[id] = p
 	}
 	return out
+}
+
+// peerLapse judges another agent on its state ref, which its heartbeat
+// moves, whenever that ref exists, even when this reader skipped the
+// document (a newer format): the configured lease then stands in for the
+// one it states. Only an agent without a state ref is judged on its outbox.
+func (e *Engine) peerLapse(ctx context.Context, id model.AgentID, now time.Time) lapse {
+	ref := bus.StateRef(id)
+	if e.shared.Refs[ref] == "" {
+		ref = bus.OutboxRef(id)
+	}
+	return e.refLapse(ctx, ref, e.shared.Refs[ref], e.shared.Agents[id].LeaseSeconds, now)
 }
 
 // visibleItems returns the items of a peer the rules may see: open items,

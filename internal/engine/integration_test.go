@@ -946,6 +946,67 @@ func TestIdlePeerLapses(t *testing.T) {
 	}
 }
 
+func TestReapJudgesAStateItCannotRead(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	cfg := testConfig()
+	cfg.ReapAfter = 2 * time.Minute
+	eb := openEngine(t, Options{Dir: f.b, Config: cfg, Now: clk.Now})
+
+	// A newer gitlet's agent: a state.json in a format b skips, which its
+	// heartbeat keeps moving, and an outbox b reads, which stays as it is.
+	const peer = model.AgentID("newer-host-abc123")
+	docs := filepath.Join(f.root, "docs")
+	runGit(t, f.root, "init", "-q", docs)
+	push := func(ref, file, content string) {
+		runGit(t, docs, "read-tree", "--empty")
+		writeFile(t, docs, file, content)
+		runGit(t, docs, "add", file)
+		commit := runGit(t, docs, "commit-tree", runGit(t, docs, "write-tree"), "-m", "gitlet: "+strings.TrimSuffix(file, ".json"))
+		runGit(t, docs, "push", "-q", "-f", f.remote, commit+":"+ref)
+	}
+	heartbeat := func() {
+		push(bus.StateRef(peer), "state.json", fmt.Sprintf(`{"format":2,"agent":{"id":%q},"heartbeat":%q}`, peer, clk.Now().UTC().Format(time.RFC3339Nano)))
+	}
+	heartbeat()
+	push(bus.OutboxRef(peer), "outbox.json", fmt.Sprintf(`{"format":1,"agent":%q}`, peer))
+	reap := func() string {
+		flowLocked(eb, func() {
+			eb.lastReap = time.Time{} // reaping runs at most hourly
+			must(t, eb.reap(ctx))
+		})
+		return runGit(t, f.remote, "for-each-ref", "--format=%(refname)", bus.AgentsPrefix+string(peer)+"/")
+	}
+
+	// b watches for longer than the lease and reapAfter together.
+	for i := range 30 {
+		clk.Advance(13 * time.Second)
+		if i%3 == 0 {
+			heartbeat()
+		}
+		must(t, eb.Tick(ctx))
+	}
+	flowLocked(eb, func() {
+		if _, read := eb.shared.Agents[peer]; read {
+			t.Fatal("b read the newer state")
+		}
+	})
+	if refs := reap(); refs == "" {
+		t.Fatal("b reaped a live agent whose state it cannot read")
+	}
+
+	// Once the state stops moving for as long, the agent is gone.
+	for range 30 {
+		clk.Advance(13 * time.Second)
+		must(t, eb.Tick(ctx))
+	}
+	if refs := reap(); refs != "" {
+		t.Errorf("refs of a gone agent left on the remote:\n%s", refs)
+	}
+}
+
 func TestSubmittedItemLands(t *testing.T) {
 	requireDeps(t)
 	f := newFixture(t)

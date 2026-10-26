@@ -285,17 +285,12 @@ func (e *Engine) reap(ctx context.Context) error {
 		return nil
 	}
 	e.lastReap = now
-	gone := func(ref, oid string, lease int) bool {
-		lp := e.refLapse(ctx, ref, oid, lease, now)
-		return lp.Lapsed && lp.For >= e.cfg.ReapAfter
-	}
+	gone := func(lp lapse) bool { return lp.Lapsed && lp.For >= e.cfg.ReapAfter }
 	refs := map[string]string{}
 	for _, id := range e.peerIDs() {
-		ref, lease := bus.OutboxRef(id), 0
-		if st, ok := e.shared.Agents[id]; ok {
-			ref, lease = bus.StateRef(id), st.LeaseSeconds
-		}
-		if !gone(ref, e.shared.Refs[ref], lease) {
+		// peerLapse judges the state ref even when its document was skipped,
+		// so a live agent of a newer gitlet is never reaped by its outbox.
+		if !gone(e.peerLapse(ctx, id, now)) {
 			continue
 		}
 		for _, r := range []string{bus.StateRef(id), bus.OutboxRef(id)} {
@@ -314,7 +309,7 @@ func (e *Engine) reap(ctx context.Context) error {
 		}
 	}
 	for key, cv := range e.shared.Claims {
-		if cv.Claim.Owner != e.me.ID && !needed[key] && gone(bus.ClaimRef(key), cv.OID, cv.Claim.LeaseSeconds) {
+		if cv.Claim.Owner != e.me.ID && !needed[key] && gone(e.refLapse(ctx, bus.ClaimRef(key), cv.OID, cv.Claim.LeaseSeconds, now)) {
 			refs[bus.ClaimRef(key)] = cv.OID
 		}
 	}
