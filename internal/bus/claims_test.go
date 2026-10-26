@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -298,6 +299,24 @@ func TestCreateClaimRejected(t *testing.T) {
 	var rej *RejectedError
 	if won || !errors.As(err, &rej) || rej.Remote[0] != "claims are disabled here" {
 		t.Fatalf("CreateClaim = %v, %v", won, err)
+	}
+}
+
+func TestCreateClaimLostToOversizedClaim(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	repo := e.clone()
+	b := e.bus(repo, agentA)
+	// Load skips the holder's claim as too large, so the engine tries to
+	// create it, loses, and reads the claim to learn the holder.
+	huge := e.store.commit("claim.json", make([]byte, MaxReadDoc+1), "gitlet: claim")
+	e.remote.set(ClaimRef(keyA), huge)
+	won, view, err := b.CreateClaim(ctx, sampleClaim(keyA, agentA, itemA), "")
+	if won || err == nil || !strings.Contains(err.Error(), "too large") || view.OID != huge {
+		t.Fatalf("CreateClaim = %v, %+v, %v; want a loss with the holder's oid and a size error", won, view, err)
+	}
+	if n := repo.bigReadCount(); n != 0 {
+		t.Fatalf("read %d documents over MaxReadDoc into memory", n)
 	}
 }
 

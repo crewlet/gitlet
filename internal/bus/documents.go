@@ -348,17 +348,22 @@ func (b *Bus) commitDoc(ctx context.Context, file string, data []byte, message, 
 }
 
 // readDoc reads one document file of a commit, refusing documents over
-// MaxReadDoc.
+// MaxReadDoc. The size is checked before the content is read, so a peer's
+// oversized document never lands in memory.
 func (b *Bus) readDoc(ctx context.Context, oid, file string) ([]byte, error) {
-	data, err := b.repo.ReadFile(ctx, oid, file)
-	if errors.Is(err, gitx.ErrNotFound) {
-		return nil, fmt.Errorf("commit %s has no %s: %w", oid, file, err)
-	}
+	rd, err := b.openReader(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > MaxReadDoc {
-		return nil, fmt.Errorf("%s of %s is too large (%d bytes, limit %d)", file, oid, len(data), MaxReadDoc)
+	defer rd.Close()
+	data, size, ok, err := rd.ReadObject(oid+":"+file, MaxReadDoc)
+	switch {
+	case errors.Is(err, gitx.ErrNotFound):
+		return nil, fmt.Errorf("commit %s has no %s: %w", oid, file, err)
+	case err != nil:
+		return nil, err
+	case !ok:
+		return nil, fmt.Errorf("%s of %s is too large (%d bytes, limit %d)", file, oid, size, MaxReadDoc)
 	}
 	return data, nil
 }

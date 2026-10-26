@@ -193,6 +193,8 @@ type fakeRepo struct {
 	fetches []gitx.FetchOptions
 	pushes  []gitx.PushOptions
 	readers int
+	// bigReads counts objects over MaxReadDoc read into memory.
+	bigReads int
 }
 
 var _ Repo = (*fakeRepo)(nil)
@@ -249,17 +251,15 @@ func (fr fakeReader) ReadObject(spec string, max int64) ([]byte, int64, bool, er
 	if max > 0 && size > max {
 		return nil, size, false, nil
 	}
+	if size > MaxReadDoc {
+		fr.r.mu.Lock()
+		fr.r.bigReads++
+		fr.r.mu.Unlock()
+	}
 	return data, size, true, nil
 }
 
 func (fakeReader) Close() error { return nil }
-
-func (r *fakeRepo) ReadFile(ctx context.Context, rev, path string) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return r.readFile(rev, path)
-}
 
 func (r *fakeRepo) readFile(rev, path string) ([]byte, error) {
 	c := r.store.get(r.resolve(rev))
@@ -534,6 +534,12 @@ func (r *fakeRepo) readerCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.readers
+}
+
+func (r *fakeRepo) bigReadCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.bigReads
 }
 
 // ---- test environment ----

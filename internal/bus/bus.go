@@ -76,7 +76,6 @@ type Repo interface {
 	MakeTree(ctx context.Context, entries []gitx.TreeEntry) (string, error)
 	CommitTree(ctx context.Context, tree string, parents []string, message string, id gitx.Identity) (string, error)
 	OpenReader(ctx context.Context) (*gitx.Reader, error)
-	ReadFile(ctx context.Context, rev, path string) ([]byte, error)
 	RevParse(ctx context.Context, rev string) (string, error)
 	UpdateRef(ctx context.Context, ref, newOID, oldOID string) error
 	DeleteRef(ctx context.Context, ref, oldOID string) error
