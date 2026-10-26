@@ -436,7 +436,19 @@ func (r *Repo) pushExcluded(ctx context.Context, commit string, published []stri
 	if err := checkRev(commit); err != nil {
 		return nil, err
 	}
-	revs := []string{commit}
+	// Nothing here fetches what a partial clone lacks: an object the clone
+	// does not have is not one a push from it sends.
+	noFetch := []string{"GIT_NO_LAZY_FETCH=1"}
+	// The commit is resolved first: newer git walks past a missing tip under
+	// --missing=allow-any instead of failing.
+	out, err := r.exec(ctx, cmdOpts{env: noFetch}, "rev-parse", "--verify", "--quiet", commit+"^{commit}")
+	if err != nil {
+		if exitCode(err) == 1 || isNotFound(err) {
+			return nil, notFound(commit)
+		}
+		return nil, err
+	}
+	revs := []string{strings.TrimSpace(string(out))}
 	var patterns, oids []string
 	for _, p := range published {
 		switch {
@@ -457,9 +469,6 @@ func (r *Repo) pushExcluded(ctx context.Context, commit string, published []stri
 			revs = append(revs, "^"+oid)
 		}
 	}
-	// Nothing here fetches what a partial clone lacks: an object the clone
-	// does not have is not one a push from it sends.
-	noFetch := []string{"GIT_NO_LAZY_FETCH=1"}
 	if len(oids) > 0 {
 		// The remote's tips this clone does not have cannot be walked, and
 		// nothing local builds on them. --missing also keeps a partial clone
@@ -485,7 +494,7 @@ func (r *Repo) pushExcluded(ctx context.Context, commit string, published []stri
 			commits = append(commits, l)
 		}
 	}}
-	_, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(revs, "\n") + "\n"), stdout: list, env: noFetch},
+	_, err = r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(revs, "\n") + "\n"), stdout: list, env: noFetch},
 		"rev-list", "--objects", "--missing=allow-any", "--stdin")
 	if err != nil {
 		return nil, mapNotFound(err, commit)
@@ -493,7 +502,7 @@ func (r *Repo) pushExcluded(ctx context.Context, commit string, published []stri
 	if len(commits) == 0 || len(objects) == 0 {
 		return nil, nil
 	}
-	out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(objects, "\n") + "\n"), env: noFetch}, "cat-file", "--batch-check")
+	out, err = r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(objects, "\n") + "\n"), env: noFetch}, "cat-file", "--batch-check")
 	if err != nil {
 		return nil, err
 	}
