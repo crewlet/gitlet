@@ -253,7 +253,7 @@ func prSuffix(pr string) string {
 	if pr == "" {
 		return ""
 	}
-	return " (" + pr + ")"
+	return " (PR " + pr + ")"
 }
 
 // createWorkBranch creates and switches to branch at from ("" means HEAD),
@@ -646,7 +646,7 @@ func statusLines(d api.StatusData, me model.AgentID) []string {
 			line += ", uncommitted changes"
 		}
 		if it.PR != "" {
-			line += ", " + it.PR
+			line += ", PR " + it.PR
 		}
 		items = append(items, line)
 		for _, o := range iv.Overlaps {
@@ -1068,7 +1068,7 @@ func whoLine(w api.WhoEntry) string {
 		b.WriteString(" [idle]")
 	}
 	if w.PR != "" {
-		b.WriteString(" " + w.PR)
+		b.WriteString(", PR " + w.PR)
 	}
 	return b.String()
 }
@@ -1189,7 +1189,7 @@ func (e *Engine) doWhy(ctx context.Context, in api.WhyInput) (*api.Reply[api.Why
 			line += " by " + string(data.Agent)
 		}
 		if data.PR != "" {
-			line += ", " + data.PR
+			line += ", PR " + data.PR
 		}
 		details = append(details, line)
 		if data.Intent != "" {

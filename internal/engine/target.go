@@ -719,7 +719,8 @@ func (e *Engine) resolveProposalID(ctx context.Context, verb, argName, arg strin
 					ids = append(ids, m.Proposal.ID)
 				}
 				by[m.Proposal.ID] = found{*m.Proposal, t}
-				labels[m.Proposal.ID] = m.Proposal.Summary
+				// The summary is the author's text: quoted and attributed.
+				labels[m.Proposal.ID] = fmt.Sprintf("%s's proposal: %q", m.From, m.Proposal.Summary)
 			}
 		}
 	}
