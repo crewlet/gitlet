@@ -1576,6 +1576,14 @@ func TestFlowStartLeavesAFinishedBranchRewrittenInPlace(t *testing.T) {
 		runGit(t, f.a, "fetch", "-q", "origin")
 		runGit(t, f.a, "rebase", "-q", "origin/main")
 	}
+	// rebaseNear rebases onto main changed two lines above the task's own
+	// change, inside the three lines of context around it.
+	rebaseNear := func(t *testing.T, f *fixture) {
+		flowMoveMain(t, f, "default: document", "default.go",
+			strings.Replace(mainGo, "// Default loads the default configuration.", "// Default loads the configuration from its default place.", 1))
+		runGit(t, f.a, "fetch", "-q", "origin")
+		runGit(t, f.a, "rebase", "-q", "origin/main")
+	}
 	for _, tc := range []struct {
 		name    string
 		trimmed bool // the task left my state first
@@ -1590,6 +1598,11 @@ func TestFlowStartLeavesAFinishedBranchRewrittenInPlace(t *testing.T) {
 		{"rebased with its reflog expired", false, func(t *testing.T, f *fixture) {
 			runGit(t, f.a, "reflog", "expire", "--expire=now", "--all")
 			rebase(t, f)
+		}, "leave"},
+		{"rebased onto a change next to its own", false, rebaseNear, "leave"},
+		{"rebased onto a change next to its own with its reflog expired", false, func(t *testing.T, f *fixture) {
+			runGit(t, f.a, "reflog", "expire", "--expire=now", "--all")
+			rebaseNear(t, f)
 		}, "leave"},
 		{"amended with more changes", false, func(t *testing.T, f *fixture) {
 			writeFile(t, f.a, "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.json", 1))

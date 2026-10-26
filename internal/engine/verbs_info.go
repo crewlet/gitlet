@@ -299,26 +299,57 @@ func (e *Engine) holdsClosed(ctx context.Context, branch, head string) bool {
 
 // holdsCommitOf reports whether tip holds one of the commits head has and
 // main lacks, as it is or by patch (cherry-picked, or rebased onto another
-// base): fewer of those commits remain once the ones tip holds are left
-// out.
+// base): a commit tip has and main lacks has the patch id of one of them
+// (patchIDs).
 func (e *Engine) holdsCommitOf(ctx context.Context, tip, head, main string) bool {
-	count := func(args ...string) int {
-		args = append([]string{"rev-list", "--count", "--no-merges"}, args...)
-		if main != "" {
-			args = append(args, "^"+main)
-		}
-		out, err := e.bg.Run(ctx, append(args, "--")...)
-		if err != nil {
-			return -1
-		}
-		n, err := strconv.Atoi(strings.TrimSpace(out))
-		if err != nil {
-			return -1
-		}
-		return n
+	if main == "" {
+		// Every commit is one main lacks: tip holds one of head's as it is
+		// when the two share history.
+		_, err := e.bg.MergeBase(ctx, tip, head)
+		return err == nil
 	}
-	lacking := count("--cherry-pick", "--right-only", tip+"..."+head)
-	return lacking >= 0 && lacking < count(head)
+	mine, err := e.patchIDs(ctx, head, "^"+main)
+	if err != nil || len(mine) == 0 {
+		return false
+	}
+	held, err := e.patchIDs(ctx, tip, "^"+main)
+	if err != nil {
+		return false
+	}
+	ids := make(map[string]bool, len(mine))
+	for _, id := range mine {
+		ids[id] = true
+	}
+	for _, id := range held {
+		if ids[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// patchIDs returns the patch id of each commit revs list, merges and
+// commits that change nothing aside: git patch-id --stable over diffs
+// without context lines, so a commit rebased onto a main that changed lines
+// next to its own keeps its id. git's --cherry-pick diffs with three lines
+// of context and takes such a commit for another change.
+func (e *Engine) patchIDs(ctx context.Context, revs ...string) (map[string]string, error) {
+	args := []string{"log", "--no-show-signature", "--no-merges", "--no-color", "-p", "-U0", "--full-index", "--format=commit %H"}
+	out, err := e.bg.Run(ctx, append(append(args, revs...), "--")...)
+	if err != nil || out == "" {
+		return nil, err
+	}
+	out, err = e.bg.RunInput(ctx, []byte(out+"\n"), "patch-id", "--stable")
+	if err != nil {
+		return nil, err
+	}
+	ids := map[string]string{}
+	for _, l := range strings.Split(out, "\n") {
+		if id, oid, ok := strings.Cut(l, " "); ok {
+			ids[oid] = id
+		}
+	}
+	return ids, nil
 }
 
 // rewrittenSince reports whether branch was rewritten in place (amended,
@@ -428,27 +459,45 @@ func (e *Engine) carryRefusal(ctx context.Context, left model.WorkItem, from, in
 // branch from main would leave them behind on the old one, while start
 // rewrites no commits. Commits main has, merged in to keep the branch up to
 // date, merges, and the item's own commits rewritten by an amend or a
-// rebase (the same patch) are no such work. It offers to move the commits,
-// named one by one, onto the new branch name from main, or to keep them on
-// top of the item's commits on that name, setting uncommitted changes
-// aside around that when the move would overwrite them. A submitted item's
-// later commits are its review fixes and stay with it.
+// rebase (the same patch id, patchIDs) are no such work. It offers to move
+// the commits, named one by one, onto the new branch name from main, or to
+// keep them on top of the item's commits on that name, setting uncommitted
+// changes aside around that when the move would overwrite them. A
+// submitted item's later commits are its review fixes and stay with it.
 func (e *Engine) leftBehindRefusal(ctx context.Context, left finishedBranch, cur, name, from, intent string) (*api.Result, error) {
 	if left.Head == "" {
 		return nil, nil
 	}
 	// %h is git's unique abbreviation: the command stays short enough to
 	// show in full however many commits it names.
-	out, err := e.bg.Run(ctx, "log", "--no-show-signature", "--no-merges", "--cherry-pick", "--left-only", "--topo-order", "--reverse",
-		"--format=%H %h %s", "HEAD..."+left.Head, "^"+from, "--")
+	out, err := e.bg.Run(ctx, "log", "--no-show-signature", "--no-merges", "--topo-order", "--reverse",
+		"--format=%H %h %s", "HEAD", "^"+left.Head, "^"+from, "--")
 	if err != nil {
 		return nil, fmt.Errorf("engine: start: %w", err)
 	}
+	// One pass gives the patch ids of the commits listed and of the rest,
+	// the item's commits from lacks.
+	ids, err := e.patchIDs(ctx, "HEAD", left.Head, "^"+from)
+	if err != nil {
+		return nil, fmt.Errorf("engine: start: %w", err)
+	}
+	lines := strings.Split(out, "\n")
+	listed := map[string]bool{}
+	for _, l := range lines {
+		oid, _, _ := strings.Cut(l, " ")
+		listed[oid] = true
+	}
+	own := map[string]bool{}
+	for oid, id := range ids {
+		if !listed[oid] {
+			own[id] = true
+		}
+	}
 	var picks, names []string
-	for _, l := range strings.Split(out, "\n") {
+	for _, l := range lines {
 		oid, rest, _ := strings.Cut(l, " ")
 		abbrev, subject, _ := strings.Cut(rest, " ")
-		if abbrev == "" {
+		if abbrev == "" || own[ids[oid]] {
 			continue
 		}
 		picks = append(picks, abbrev)

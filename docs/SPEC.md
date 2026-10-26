@@ -469,14 +469,15 @@ A work item is one task on one branch in one worktree.
   closed item's branch is its own while the branch is at the commit it had
   when the item closed or, while main does not contain that commit, builds
   on it, holds one of the item's commits main lacks as it is or by patch
-  (cherry-picked, rebased), or was rewritten in place since (amended,
-  rebased, reset): the branch's reflog has that commit and no later entry
-  at a commit main contains. The ledger records that commit, so this holds
-  after the item leaves my state. A branch made again under the same name,
-  deleted and created anew from main or elsewhere, or reset onto main
-  (`git switch -C`), is ordinary. A provisional item never makes a branch
-  its own, even once abandoned: gitlet opened it for the branch the agent
-  was already on.
+  (cherry-picked, rebased; patches compare without their context lines, so
+  a rebase onto lines main changed next to the item's keeps them the same),
+  or was rewritten in place since (amended, rebased, reset): the branch's
+  reflog has that commit and no later entry at a commit main contains. The
+  ledger records that commit, so this holds after the item leaves my state.
+  A branch made again under the same name, deleted and created anew from
+  main or elsewhere, or reset onto main (`git switch -C`), is ordinary. A
+  provisional item never makes a branch its own, even once abandoned:
+  gitlet opened it for the branch the agent was already on.
   Uncommitted changes that main's version of their files would overwrite are
   refused, with `git stash` as the way out. So are commits made on a closed
   item's branch after it closed, aside from merges, commits main has and the
