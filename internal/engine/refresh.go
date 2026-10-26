@@ -44,10 +44,27 @@ type pollState struct {
 	lastFetch    time.Time // when the fetch whose result we use ran
 	fingerprint  string    // tracking refs fingerprint after it
 	next         time.Time // when the next background poll is due
-	failures     int       // consecutive network failures
+	failures     int       // consecutive failed fetches
+	retryAt      time.Time // after a failure, verbs fetch again only from then on
+	slow         bool      // the last fetch ran out of its budget
 	offlineSince *time.Time
 	needFlush    bool      // own refs were written while offline
 	outsideAt    time.Time // last fetch of outside branches
+}
+
+// verbMayFetch reports whether a verb may spend its refresh budget on a
+// fetch: not while the backoff after a failed fetch lasts.
+func (p *pollState) verbMayFetch(now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failures == 0 || !now.Before(p.retryAt)
+}
+
+// isSlow reports whether the last fetch ran out of its budget.
+func (p *pollState) isSlow() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.slow
 }
 
 // requestFlush asks the next successful poll to flush own refs.
@@ -141,12 +158,15 @@ func needsRefresh(lastFetch, now time.Time) bool {
 	return lastFetch.IsZero() || now.Sub(lastFetch) > verbRefreshAfter
 }
 
-// fetch runs one poll, bus.Fetch, and updates the schedule: on success the
-// next poll is one jittered interval away and an end of offline time
-// schedules a flush; a network failure sets offlineSince and backs off. A
-// fetch cut short by ctx (a verb's budget) is neither: the remote is slow,
-// not gone. Only one fetch runs at a time; waiting for it honors ctx.
-// fetch does not need e.mu, and callers holding it must pass a budget.
+// fetch runs one poll, bus.Fetch, and updates the schedule. On success the
+// next poll is one jittered interval away, the backoff ends and an end of
+// offline time schedules a flush. Every failure backs verbs off
+// (verbMayFetch) for an exponential delay. A network failure also sets
+// offlineSince and delays the background poll by the same backoff; a fetch
+// cut short by ctx (a verb's budget) marks the remote slow, not gone, and
+// leaves the background poll on schedule, since Tick has no such budget.
+// Only one fetch runs at a time; waiting for it honors ctx. fetch does not
+// need e.mu, and callers holding it must pass a budget.
 func (e *Engine) fetch(ctx context.Context) (bus.FetchResult, error) {
 	select {
 	case e.pollSem <- struct{}{}:
@@ -160,29 +180,32 @@ func (e *Engine) fetch(ctx context.Context) (bus.FetchResult, error) {
 	p := &e.poll
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	switch {
-	case err == nil:
+	if err == nil {
 		if res.At.IsZero() {
 			res.At = now
 		}
-		p.lastFetch, p.fingerprint, p.failures = res.At, res.Fingerprint, 0
+		p.lastFetch, p.fingerprint = res.At, res.Fingerprint
+		p.failures, p.retryAt, p.slow = 0, time.Time{}, false
 		if p.offlineSince != nil {
 			p.offlineSince, p.needFlush = nil, true
 		}
 		p.next = now.Add(pollDelay(e.cfg.PollInterval, 0, rand.Float64()))
 		return res, nil
-	case ctx.Err() != nil:
+	}
+	p.failures++
+	backoff := now.Add(pollDelay(e.cfg.PollInterval, p.failures, rand.Float64()))
+	p.retryAt = backoff
+	p.slow = ctx.Err() != nil
+	switch {
+	case p.slow:
 		return res, fmt.Errorf("engine: poll: %w", ctx.Err())
 	case gitx.IsNetwork(err):
-		p.failures++
 		if p.offlineSince == nil {
 			t := now
 			p.offlineSince = &t
 		}
-	default:
-		p.failures++
 	}
-	p.next = now.Add(pollDelay(e.cfg.PollInterval, p.failures, rand.Float64()))
+	p.next = backoff
 	return res, fmt.Errorf("engine: poll: %w", err)
 }
 
@@ -280,13 +303,16 @@ func (e *Engine) observation(ctx context.Context) ledger.Observation {
 // refreshForVerb is the verb-time refresh rule (docs/SPEC.md, section 6.2):
 // when the last successful fetch is older than five seconds the verb polls
 // with a two-second budget; otherwise, or when the budget runs out or the
-// remote is unreachable, it uses the cached state. Results then report its
-// age (stateAge) and offlineSince. It loads the shared state when nothing
-// is cached yet. Errors mean the local refs could not be read.
-// beginVerb calls it; verbs need not.
+// remote is unreachable, it uses the cached state. After a failed fetch,
+// verbs do not poll again until its backoff has passed, so a slow or
+// unreachable remote costs one budget, not one per verb; a successful poll
+// (Tick's) ends the backoff. Results report the state's age (stateAge),
+// offlineSince and a warning. It loads the shared state when nothing is
+// cached yet. Errors mean the local refs could not be read. beginVerb
+// calls it; verbs need not.
 func (e *Engine) refreshForVerb(ctx context.Context) error {
 	last, _ := e.poll.snapshot()
-	if needsRefresh(last, e.now()) {
+	if now := e.now(); needsRefresh(last, now) && e.poll.verbMayFetch(now) {
 		bctx, cancel := context.WithTimeout(ctx, verbRefreshBudget)
 		res, err := e.fetch(bctx)
 		cancel()

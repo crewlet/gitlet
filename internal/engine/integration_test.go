@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -619,22 +620,60 @@ func TestVerbRefreshBudget(t *testing.T) {
 	})
 	runGit(t, f.a, "remote", "set-url", "origin", "git://"+ln.Addr().String()+"/remote.git")
 
-	ea := openEngine(t, Options{Dir: f.a})
-	begin := time.Now()
-	r, err := ea.Status(ctx, api.StatusInput{})
-	elapsed := time.Since(begin)
-	must(t, err)
-	if r.Outcome != api.OK {
-		t.Errorf("status with a hanging remote: %s %q", r.Outcome, r.Summary)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	status := func(wantFetches int64, maxTime time.Duration) *api.Reply[api.StatusData] {
+		t.Helper()
+		begin := time.Now()
+		r, err := ea.Status(ctx, api.StatusInput{})
+		elapsed := time.Since(begin)
+		must(t, err)
+		if r.Outcome != api.OK {
+			t.Errorf("status: %s %q", r.Outcome, r.Summary)
+		}
+		if n := ea.fetches.Load(); n != wantFetches {
+			t.Errorf("fetched %d times, want %d", n, wantFetches)
+		}
+		if elapsed > maxTime {
+			t.Errorf("status took %v, want at most %v", elapsed, maxTime)
+		}
+		return r
 	}
-	if n := ea.fetches.Load(); n != 1 {
-		t.Errorf("fetched %d times, want 1", n)
+	slowWarning := func(r *api.Reply[api.StatusData]) bool {
+		for _, w := range r.Warnings {
+			if strings.Contains(w, "did not answer") {
+				return true
+			}
+		}
+		return false
 	}
-	if elapsed > verbRefreshBudget+3*time.Second {
-		t.Errorf("status took %v with a hanging remote; the refresh budget is %v", elapsed, verbRefreshBudget)
-	}
+
+	// The first verb spends its budget on the hanging remote.
+	r := status(1, verbRefreshBudget+3*time.Second)
 	if r.OfflineSince != nil {
 		t.Errorf("a slow remote is not offline: %v", r.OfflineSince)
+	}
+	if !slowWarning(r) {
+		t.Errorf("no warning about the slow remote: %q", r.Warnings)
+	}
+	// The next verbs use the cached state until the backoff has passed.
+	r = status(1, time.Second)
+	if !slowWarning(r) {
+		t.Errorf("no warning about the slow remote: %q", r.Warnings)
+	}
+	clk.Advance(time.Minute)
+	status(2, verbRefreshBudget+3*time.Second)
+
+	// Once a tick reaches the remote again, verbs refresh as usual.
+	runGit(t, f.a, "remote", "set-url", "origin", f.remote)
+	must(t, ea.Tick(ctx))
+	if n := ea.fetches.Load(); n != 3 {
+		t.Fatalf("tick fetched %d times in all, want 3", n)
+	}
+	clk.Advance(6 * time.Second)
+	r = status(4, 5*time.Second)
+	if slowWarning(r) || r.OfflineSince != nil {
+		t.Errorf("after a good fetch: offline %v, warnings %q", r.OfflineSince, r.Warnings)
 	}
 }
 
@@ -679,12 +718,13 @@ func TestTwoAgentsOnTheSameCodeGetNotes(t *testing.T) {
 	writeFile(t, f.b, "config.go", strings.Replace(configGo, "return &Config{Path: path}, nil", "return &Config{Path: path + \".toml\"}, nil", 1))
 	ra, err := ea.Start(ctx, api.StartInput{Intent: "Add strict mode to config loading"})
 	must(t, err)
-	rb, err := eb.Start(ctx, api.StartInput{Intent: "Append the extension to config paths", Paths: []string{"config.go"}})
+	rb, err := eb.Start(ctx, api.StartInput{Intent: "Append the extension to config paths"})
 	must(t, err)
 	if ra.Outcome != api.OK || rb.Outcome != api.OK {
 		t.Fatalf("start: %q / %q", ra.Summary, rb.Summary)
 	}
-	// b started after a, so it already sees a changing config.go.
+	// b started after a and had already edited config.go, so without
+	// naming paths it sees a changing it.
 	if !hasEntry(rb.Data.Touching, ea.Agent().ID, "changes") {
 		t.Errorf("b's start shows nobody touching its paths: %+v", rb.Data.Touching)
 	}
@@ -790,6 +830,97 @@ func TestBreakingChangeIsClaimedAutomatically(t *testing.T) {
 }
 
 func e2eLease(e *Engine) time.Duration { return e.Config().Lease }
+
+func TestHolderMergesNeedRequirements(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	eb := openEngine(t, Options{Dir: f.b, Now: clk.Now})
+	writeFile(t, f.a, "config.go", strings.Replace(configGo, "func Load(path string) (*Config, error) {\n\treturn &Config{Path: path}, nil",
+		"func Load(path string, strict bool) (*Config, error) {\n\treturn &Config{Path: path, Strict: strict}, nil", 1))
+	writeFile(t, f.b, "default.go", mainGo+"\n// Strict loads the strict configuration.\nfunc Strict() (*Config, error) {\n\treturn Load(\"strict.toml\")\n}\n")
+	ra, err := ea.Start(ctx, api.StartInput{Intent: "Add a strict flag to Load"})
+	must(t, err)
+	rb, err := eb.Start(ctx, api.StartInput{Intent: "Add a strict default"})
+	must(t, err)
+	if ra.Outcome != api.OK || rb.Outcome != api.OK {
+		t.Fatalf("start: %q / %q", ra.Summary, rb.Summary)
+	}
+
+	// a claims Load automatically.
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	claimOID := func() string {
+		return runGit(t, f.remote, "for-each-ref", "--format=%(objectname)", bus.ClaimsPrefix)
+	}
+	created := claimOID()
+	ea.mu.Lock()
+	var key string
+	for _, cv := range ea.myClaims() {
+		if cv.Claim.Symbol.Ref() == "config.go:Load" {
+			key = cv.Claim.Key
+		}
+	}
+	ea.mu.Unlock()
+	if key == "" || created == "" {
+		t.Fatalf("a holds no claim on Load (remote %q)", created)
+	}
+
+	// b states what it needs from Load, as the need verb will.
+	const text = "keep accepting a plain path"
+	eb.mu.Lock()
+	_, err = eb.mutateOutbox(ctx, func(ob *model.Outbox) error {
+		ob.Needs = append(ob.Needs, model.Need{
+			ID: model.NewMessageID(), Key: key, Name: "config.go:Load", Item: rb.Data.Item.ID,
+			Requirement: text, CreatedAt: clk.Now().UTC(),
+		})
+		return nil
+	})
+	eb.mu.Unlock()
+	must(t, err)
+
+	// a's next poll sees the need and writes the requirement into its claim,
+	// long before the claim's renewal is due.
+	clk.Advance(30 * time.Second)
+	must(t, ea.Tick(ctx))
+	merged := claimOID()
+	if merged == created {
+		t.Fatal("the claim was not rewritten with b's requirement")
+	}
+	ea.mu.Lock()
+	cv, _ := ea.claimFor(key)
+	ea.mu.Unlock()
+	want := []model.Requirement{{From: eb.Agent().ID, Text: text}}
+	if !reflect.DeepEqual(cv.Claim.Requirements, want) {
+		t.Errorf("claim requirements = %+v, want %+v", cv.Claim.Requirements, want)
+	}
+
+	// Nothing changed since: no rewrite.
+	clk.Advance(30 * time.Second)
+	must(t, ea.Tick(ctx))
+	if claimOID() != merged {
+		t.Error("the claim was rewritten although nothing changed")
+	}
+
+	// b sees its requirement on a's claim.
+	clk.Advance(6 * time.Second)
+	st, err := eb.Status(ctx, api.StatusInput{})
+	must(t, err)
+	found := false
+	for _, n := range st.Data.Needs {
+		if n.Need.Key == key && n.Owner == ea.Agent().ID {
+			found = true
+		}
+	}
+	who, err := eb.Who(ctx, api.WhoInput{Target: "config.go:Load"})
+	must(t, err)
+	if !found || !hasEntry(who.Data.Entries, ea.Agent().ID, "owns") {
+		t.Errorf("b's view: needs %+v, who %+v", st.Data.Needs, who.Data.Entries)
+	}
+}
 
 func TestSignatureClashFallsBackToTheHolder(t *testing.T) {
 	requireDeps(t)

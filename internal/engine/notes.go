@@ -267,15 +267,20 @@ func notesOfKind(notes []model.Note, kind model.NoteKind) []model.Note {
 }
 
 // warnings lists what every result says about the engine's own condition:
-// offline time, old git, read-only reasons, skipped documents, rejected
+// offline time or a remote too slow for the refresh budget (with the age of
+// the state used), old git, read-only reasons, skipped documents, rejected
 // snapshots and items whose base is too far behind main.
 func (e *Engine) warnings(offline *time.Time, age string) []string {
 	var w []string
-	if offline != nil {
-		if age == "" {
-			age = "an unknown time"
-		}
-		w = append(w, fmt.Sprintf("offline since %s: using state from %s ago", offline.Local().Format("15:04"), age))
+	using := "using state from " + age + " ago"
+	if age == "" {
+		using = "nothing fetched yet"
+	}
+	switch {
+	case offline != nil:
+		w = append(w, fmt.Sprintf("offline since %s: %s", offline.Local().Format("15:04"), using))
+	case e.poll.isSlow():
+		w = append(w, fmt.Sprintf("the remote did not answer within %s: %s", verbRefreshBudget, using))
 	}
 	if e.gitWarn != "" {
 		w = append(w, e.gitWarn)

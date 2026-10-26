@@ -345,6 +345,21 @@ func TestPollStateFlush(t *testing.T) {
 	}
 }
 
+func TestPollStateVerbBackoff(t *testing.T) {
+	var p pollState
+	now := time.Now()
+	if !p.verbMayFetch(now) || p.isSlow() {
+		t.Fatal("a verb may always fetch before any failure")
+	}
+	p.failures, p.retryAt, p.slow = 1, now.Add(40*time.Second), true
+	if p.verbMayFetch(now.Add(39 * time.Second)) {
+		t.Error("a verb fetched during the backoff")
+	}
+	if !p.verbMayFetch(now.Add(40*time.Second)) || !p.isSlow() {
+		t.Error("the backoff did not end")
+	}
+}
+
 func TestVisibleItems(t *testing.T) {
 	items := []model.WorkItem{
 		{ID: "a", Status: model.ItemActive},
@@ -494,7 +509,71 @@ func TestMergeRequirements(t *testing.T) {
 	}
 }
 
+func TestNeedRequirements(t *testing.T) {
+	t0 := time.Date(2026, 5, 6, 7, 8, 9, 0, time.UTC)
+	needs := []agentNeed{
+		{"me", model.Need{ID: "m1", Requirement: "mine", CreatedAt: t0}},
+		{"bob", model.Need{ID: "b1", Requirement: "older", CreatedAt: t0}},
+		{"bob", model.Need{ID: "b2", Requirement: "newer", CreatedAt: t0.Add(time.Minute)}},
+		{"bob", model.Need{ID: "b3", Requirement: "  ", CreatedAt: t0.Add(time.Hour)}},
+		{"carol", model.Need{ID: "c1", CreatedAt: t0}},
+		{"ann", model.Need{ID: "a1", Requirement: "first", CreatedAt: t0}},
+		{"ann", model.Need{ID: "a2", Requirement: "same time, larger id", CreatedAt: t0}},
+	}
+	got := needRequirements("me", needs)
+	want := []model.Requirement{{From: "ann", Text: "same time, larger id"}, {From: "bob", Text: "newer"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("needRequirements = %+v, want %+v", got, want)
+	}
+	if got := needRequirements("me", nil); len(got) != 0 {
+		t.Errorf("no needs: %+v", got)
+	}
+}
+
+func TestClaimRequirements(t *testing.T) {
+	tests := []struct {
+		name      string
+		current   []model.Requirement
+		fromNeeds []model.Requirement
+		want      []model.Requirement
+		changed   bool
+	}{
+		{"nothing either side", nil, nil, []model.Requirement{}, false},
+		{"first requirement", nil, []model.Requirement{{From: "b", Text: "x"}}, []model.Requirement{{From: "b", Text: "x"}}, true},
+		{"need text replaces the claim's", []model.Requirement{{From: "b", Text: "old"}}, []model.Requirement{{From: "b", Text: "new"}}, []model.Requirement{{From: "b", Text: "new"}}, true},
+		{"kept requirements stay", []model.Requirement{{From: "a", Text: "from a thread"}}, []model.Requirement{{From: "b", Text: "x"}},
+			[]model.Requirement{{From: "a", Text: "from a thread"}, {From: "b", Text: "x"}}, true},
+		{"same set in another order", []model.Requirement{{From: "c", Text: "z"}, {From: "b", Text: "x"}}, []model.Requirement{{From: "b", Text: "x"}},
+			[]model.Requirement{{From: "b", Text: "x"}, {From: "c", Text: "z"}}, false},
+		{"no needs", []model.Requirement{{From: "b", Text: "x"}}, nil, []model.Requirement{{From: "b", Text: "x"}}, false},
+	}
+	for _, tt := range tests {
+		got, changed := claimRequirements(model.Claim{Requirements: tt.current}, tt.fromNeeds)
+		if !reflect.DeepEqual(got, tt.want) || changed != tt.changed {
+			t.Errorf("%s: %+v, %v; want %+v, %v", tt.name, got, changed, tt.want, tt.changed)
+		}
+	}
+}
+
 // ---- snapshots, branches, provenance ----
+
+func TestTouchedPaths(t *testing.T) {
+	fp := model.Footprint{Files: []model.FileChange{
+		{Path: "c.go"},
+		{Path: "a.go"},
+		{Path: "new.go", OldPath: "old.go"},
+	}}
+	got := touchedPaths([]string{"b.go", "a.go"}, fp)
+	if want := []string{"b.go", "a.go", "c.go", "new.go", "old.go"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("touchedPaths = %v, want %v", got, want)
+	}
+	if got := touchedPaths(nil, model.Footprint{}); len(got) != 0 {
+		t.Errorf("nothing to check: %v", got)
+	}
+	if got := touchedPaths(nil, fp); !reflect.DeepEqual(got, []string{"a.go", "c.go", "new.go", "old.go"}) {
+		t.Errorf("snapshot only: %v", got)
+	}
+}
 
 func TestIntentFromBranch(t *testing.T) {
 	tests := []struct{ branch, want string }{

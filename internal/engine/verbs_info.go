@@ -153,7 +153,7 @@ func (e *Engine) doStart(ctx context.Context, in api.StartInput) (*api.Reply[api
 
 	data := api.StartData{Item: item, Branch: branch, NewBranch: newBranch, Adopted: adopt != nil}
 	data.Similar = e.similarItems(ctx, intent, item.ID)
-	data.Touching = e.touching(ctx, paths, item.ID)
+	data.Touching = e.touching(ctx, touchedPaths(paths, item.Footprint), item.ID)
 	data.AlreadyDone = e.alreadyDone(ctx, intent)
 
 	summary := fmt.Sprintf("Started %q on branch %s.", intent, branch)
@@ -289,13 +289,42 @@ func (e *Engine) similarItems(ctx context.Context, intent string, self model.Ite
 	return out
 }
 
-// touching lists the items and claims that touch the paths start was given.
+// touchedPaths is what start checks for overlap: the paths it was given,
+// then the files its snapshot already changes (old paths of renames
+// included), each once. An agent that edited before calling start sees the
+// overlaps of those edits too.
+func touchedPaths(paths []string, fp model.Footprint) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range paths {
+		add(p)
+	}
+	var changed []string
+	for _, f := range fp.Files {
+		changed = append(changed, f.Path, f.OldPath)
+	}
+	sort.Strings(changed)
+	for _, p := range changed {
+		add(p)
+	}
+	return out
+}
+
+// touching lists the other agents' items and claims that change or own
+// any of paths (start's touchedPaths), each entry once, in who's order.
 func (e *Engine) touching(ctx context.Context, paths []string, self model.ItemID) []api.WhoEntry {
 	if len(paths) == 0 {
 		return nil
 	}
 	isDir := e.dirChecker(ctx)
 	v := e.lightView(ctx)
+	seen := map[api.WhoEntry]bool{}
 	var out []api.WhoEntry
 	for _, p := range paths {
 		t := target{Kind: targetPath, Path: p, Raw: p}
@@ -303,11 +332,13 @@ func (e *Engine) touching(ctx context.Context, paths []string, self model.ItemID
 			t.Kind = targetDir
 		}
 		for _, w := range e.whoEntries(ctx, t, v, self) {
-			if w.Role == "changes" || w.Role == "owns" {
+			if (w.Role == "changes" || w.Role == "owns") && w.Agent != e.me.ID && !seen[w] {
+				seen[w] = true
 				out = append(out, w)
 			}
 		}
 	}
+	sortWhoEntries(out)
 	return out
 }
 
@@ -726,6 +757,13 @@ func (e *Engine) whoEntries(ctx context.Context, t target, v rules.View, skip mo
 			out = append(out, api.WhoEntry{Role: "branch", Detail: "branch " + o.Branch + " (not a gitlet task): " + detail})
 		}
 	}
+	sortWhoEntries(out)
+	return out
+}
+
+// sortWhoEntries orders entries by role (owns, changes, needs, references,
+// branch), then agent, item and detail.
+func sortWhoEntries(out []api.WhoEntry) {
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if whoRoles[a.Role] != whoRoles[b.Role] {
@@ -739,7 +777,6 @@ func (e *Engine) whoEntries(ctx context.Context, t target, v rules.View, skip mo
 		}
 		return a.Detail < b.Detail
 	})
-	return out
 }
 
 // targetDefinitions returns the symbols references to a target are matched

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -155,6 +156,39 @@ func mergeRequirements(old, new []model.Requirement) []model.Requirement {
 	return out
 }
 
+// needRequirements picks the requirement each other agent states in its
+// needs on one claim key: one per agent, from its newest need with a
+// requirement text. The holder's own needs and needs without text are left
+// out. The result is sorted by agent.
+func needRequirements(me model.AgentID, needs []agentNeed) []model.Requirement {
+	newest := map[model.AgentID]model.Need{}
+	for _, an := range needs {
+		if an.Agent == me || strings.TrimSpace(an.Need.Requirement) == "" {
+			continue
+		}
+		cur, ok := newest[an.Agent]
+		if !ok || an.Need.CreatedAt.After(cur.CreatedAt) ||
+			an.Need.CreatedAt.Equal(cur.CreatedAt) && an.Need.ID > cur.ID {
+			newest[an.Agent] = an.Need
+		}
+	}
+	out := make([]model.Requirement, 0, len(newest))
+	for from, n := range newest {
+		out = append(out, model.Requirement{From: from, Text: n.Requirement})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].From < out[j].From })
+	return out
+}
+
+// claimRequirements returns the requirements a claim of mine carries once
+// fromNeeds are merged in (mergeRequirements: one per agent, the needs'
+// text winning), and whether that differs from what it carries now,
+// compared as sets, so a claim is never rewritten for nothing.
+func claimRequirements(c model.Claim, fromNeeds []model.Requirement) ([]model.Requirement, bool) {
+	merged := mergeRequirements(c.Requirements, fromNeeds)
+	return merged, !slices.Equal(merged, mergeRequirements(c.Requirements, nil))
+}
+
 // renewDue reports whether a lease written at last needs renewing: a third
 // of it has passed (docs/SPEC.md, section 8).
 func renewDue(last, now time.Time, lease time.Duration) bool {
@@ -169,8 +203,13 @@ func isActive(last, now time.Time, lease time.Duration) bool {
 
 // renew keeps this agent's leases while it is active: once a third of the
 // lease has passed, the heartbeat (a state write) and every claim it holds
-// are renewed, the claims batched in one push (bus.UpdateClaims). An idle
-// agent lets them lapse, which frees its claims for takeover.
+// are renewed. It also merges the requirements peers state in their needs
+// into the claims it holds (claimRequirements); a claim whose requirements
+// changed is written at once, and with the renewals when they are due. All
+// claim writes go in one push (bus.UpdateClaims), each with a lease on the
+// oid seen. An idle agent writes nothing and lets its leases lapse, which
+// frees its claims for takeover; that includes requirement merges, since
+// any write would keep a claim alive.
 func (e *Engine) renew(ctx context.Context) error {
 	if e.readOnly() {
 		return nil
@@ -187,10 +226,14 @@ func (e *Engine) renew(ctx context.Context) error {
 	}
 	var ups []bus.ClaimUpdate
 	for _, cv := range e.myClaims() {
-		if !renewDue(cv.Claim.UpdatedAt, now, lease) {
+		c := cv.Claim
+		reqs, reqsChanged := claimRequirements(c, needRequirements(e.me.ID, e.needsOn(c.Key)))
+		if !reqsChanged && !renewDue(c.UpdatedAt, now, lease) {
 			continue
 		}
-		c := cv.Claim
+		if reqsChanged {
+			c.Requirements = reqs
+		}
 		c.UpdatedAt, c.LeaseSeconds = now.UTC(), leaseSeconds(lease)
 		parent := ""
 		if c.Contract != nil {
