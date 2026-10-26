@@ -349,15 +349,27 @@ func (c *ctx) stale(m *entry) {
 }
 
 // newCallers: main gained, since my base, references to a symbol I change
-// in a breaking way. act; info when matched by method name only.
+// in a breaking way. act; info when matched by method name only. When main
+// made the same change (a stub I use landed, or the same signature change
+// landed), its new references were written against my signature, and my
+// change breaks none of them.
 func (c *ctx) newCallers(m *entry) {
 	mv, ok := c.v.Main[m.id()]
 	if !ok || mv.Skipped {
 		return
 	}
+	onMain := map[string]string{}
+	for _, ch := range uniqueChanges(mv.Footprint.Symbols) {
+		if ch.SignatureChanging() {
+			onMain[baseKey(ch)] = outcome(ch)
+		}
+	}
 	for _, k := range m.keys {
 		ch := m.changes[k]
 		if !ch.SignatureChanging() || !breaking(ch) {
+			continue
+		}
+		if out, ok := onMain[k]; ok && out == outcome(ch) {
 			continue
 		}
 		old := oldSymbol(ch)

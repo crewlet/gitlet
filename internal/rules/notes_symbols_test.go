@@ -286,11 +286,20 @@ func TestNewCallers(t *testing.T) {
 	mainRefs := func(ch model.SymbolChange, rs ...model.Ref) *vb {
 		return view().mine(item(myItem, myIntent, changes(ch))).main(myItem, model.Footprint{Refs: rs})
 	}
+	cli := ref("parseConfig", "typescript", "src/cli.ts", 4, "src/config")
+	// Main changed the symbol too, along with its new callers.
+	mainChanged := func(mine, theirs model.SymbolChange) *vb {
+		return view().mine(item(myItem, myIntent, changes(mine))).
+			main(myItem, model.Footprint{Symbols: []model.SymbolChange{theirs}, Refs: []model.Ref{cli}})
+	}
 	runSev(t, model.NoteNewCallers, []sevCase{
-		{"breaking", mainRefs(cfgBreaking, ref("parseConfig", "typescript", "src/cli.ts", 4, "src/config")).v, model.SeverityAct},
-		{"compatible", mainRefs(cfgCompat, ref("parseConfig", "typescript", "src/cli.ts", 4, "src/config")).v, ""},
+		{"breaking", mainRefs(cfgBreaking, cli).v, model.SeverityAct},
+		{"compatible", mainRefs(cfgCompat, cli).v, ""},
 		{"unresolved", mainRefs(sigChange(loadM, "load(): void", true), methodRef("load", "c", "typescript", "src/cli.ts", 9)).v, model.SeverityInfo},
 		{"no new references", mainRefs(cfgBreaking).v, ""},
+		// A stub I picked landed: main's new callers use my signature.
+		{"main made the same change", mainChanged(cfgBreaking, cfgBreaking).v, ""},
+		{"main changed it differently", mainChanged(cfgBreaking, cfgCompat).v, model.SeverityAct},
 	})
 	n := one(t, eval(t, mainRefs(cfgBreaking,
 		ref("parseConfig", "typescript", "src/cli.ts", 4, "src/config"),
