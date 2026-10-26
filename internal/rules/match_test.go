@@ -28,6 +28,8 @@ func TestMatch(t *testing.T) {
 	rsInline.Kind = "function" // in the inline module retry
 	rsAssoc := fn("rust", "src/parser.rs", "Parser.MAX", "pub const Parser::MAX: usize")
 	rsAssoc.Kind = "const"
+	tsNsFn := fn("typescript", "src/config.ts", "Config.load", "function load(string): string")
+	tsNsFn.Kind = "function" // in namespace Config, or a namespace merged with class Config
 	tsCtor := fn("typescript", "src/config.ts", "Config.constructor", "constructor(string)")
 	nsCtor := fn("typescript", "src/config.ts", "conf.Config.constructor", "constructor(string)")
 	pyCtor := fn("python", "pkg/config.py", "Config.__init__", "def __init__(self, path)")
@@ -67,6 +69,10 @@ func TestMatch(t *testing.T) {
 		{"default import does not reach a function", typed(ref("parseConfig", "typescript", "src/a.ts", 1, "src/config"), "Cfg", "default"), tsFn, false, false, false},
 		{"default import does not reach a class in a namespace", typed(ref("load", "typescript", "src/a.ts", 1, "src/config"), "Cfg", "default"),
 			fn("typescript", "src/config.ts", "conf.Config.load", "static load(string): void"), false, false, false},
+		{"static call through a default import of a namespace", typed(ref("load", "typescript", "src/a.ts", 1, "src/config"), "Config", "default"), tsNsFn, false, true, true},
+		{"static call through a renamed default import of a namespace", typed(ref("load", "typescript", "src/a.ts", 1, "src/config"), "Cfg", "default"), tsNsFn, false, true, true},
+		{"default import does not reach a function in a nested namespace", typed(ref("load", "typescript", "src/a.ts", 1, "src/config"), "Cfg", "default"),
+			model.Symbol{Lang: "typescript", Path: "src/config.ts", Name: "load", Qualified: "conf.Config.load", Container: "conf.Config", Kind: "function"}, false, false, false},
 		{"default import in another module", typed(ref("load", "typescript", "src/a.ts", 1, "src/other"), "Cfg", "default"), tsMethod, false, false, false},
 		{"default container is a JavaScript form", typed(ref("load", "python", "pkg/a.py", 1, "pkg/config"), "default", "default"),
 			fn("python", "pkg/config.py", "Config.load", "def load(cls)"), false, false, false},

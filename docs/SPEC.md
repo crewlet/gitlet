@@ -783,10 +783,11 @@ it is capitalized, and otherwise an exported object, whose members are
 taken for the module's own functions. The importer's name for a default
 export need not be its own (`import Cfg from './config'` for
 `export default class Config`), so a capitalized default import reaches
-the members of any top-level class of its module. The refs of a footprint
-older than version 2, which other agents' older gitlets still publish,
-carry no container whatever their qualifier named, so they reach every
-symbol of their name in their module, members included.
+what any top-level class or namespace of its module holds, but not the
+module's own functions. The refs of a footprint older than version 2,
+which other agents' older gitlets still publish, carry no container
+whatever their qualifier named, so they reach every symbol of their name
+in their module, members included.
 
 Building an instance names the class, while its parameters belong to the
 constructor, a method of its own. So a resolved `new X(...)` in TypeScript
