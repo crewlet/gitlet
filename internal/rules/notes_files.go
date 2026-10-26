@@ -224,7 +224,9 @@ func cpFacts(cps []cp) []string {
 // 10.2). act when an intent signal and a footprint signal agree, info for
 // one. Provisional items use footprint signals only; broad footprints give
 // no footprint signal. Pairs with a signature_clash or body_overlap
-// relation get no duplicate note.
+// relation get no duplicate note, and neither do pairs where one needs a
+// symbol the other owns or changes: they already coordinate through it, and
+// a stub one uses from the other puts the same change in both footprints.
 func (c *ctx) duplicates(m *entry) {
 	var corpus []string
 	for _, e := range c.entries {
@@ -233,7 +235,7 @@ func (c *ctx) duplicates(m *entry) {
 		}
 	}
 	for _, o := range c.others(m) {
-		if c.symbolOverlap(m, o) {
+		if c.symbolOverlap(m, o) || c.needLinked(m, o) {
 			continue
 		}
 		var signals, ev []string
@@ -272,6 +274,26 @@ func (c *ctx) duplicates(m *entry) {
 			optDismiss(n.ID, "the tasks are different"))
 		c.emit(n)
 	}
+}
+
+// needLinked reports whether one of m and o needs a symbol the other changes
+// or holds the claim on.
+func (c *ctx) needLinked(m, o *entry) bool {
+	linked := func(x, y *entry) bool {
+		for _, n := range c.needsOf(x.agent) {
+			if n.Key == "" || c.needEntry(x.agent, n) != x {
+				continue
+			}
+			if _, ok := y.changes[n.Key]; ok {
+				return true
+			}
+			if cv, ok := c.claim(n.Key); ok && cv.Claim.Item == y.id() {
+				return true
+			}
+		}
+		return false
+	}
+	return linked(m, o) || linked(o, m)
 }
 
 // signal is one footprint signal of a duplicate.

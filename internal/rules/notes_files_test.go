@@ -122,6 +122,10 @@ func TestDuplicate(t *testing.T) {
 		{"pair with signature_clash", dup(myIntent, similar, opts(changes(cfgBreaking)), opts(changes(cfgCompat))).v, ""},
 		{"broad footprint gives no footprint signal", dup(myIntent, similar, shared, append(opts(broadFP()), shared...)).v, model.SeverityInfo},
 		{"lapsed", dup(myIntent, similar, shared, shared).lapsed(bob, t0.Add(-time.Hour)).v, model.SeverityWarn},
+		// A need links the pair: a stub I use puts their change in my footprint.
+		{"I need a symbol they change", dup(myIntent, similar, shared, append(opts(changes(cfgBreaking)), shared...)).need(me, myNeed(t0)).v, ""},
+		{"they need a symbol I hold", dup(myIntent, similar, shared, shared).need(bob, bobNeeds("")).claim(cfg.Key, me, myItem, 0).v, ""},
+		{"a need on someone else's symbol", dup(myIntent, similar, shared, shared).need(me, myNeed(t0)).claim(cfg.Key, carol, carolItem, 0).v, model.SeverityAct},
 	})
 	n := one(t, eval(t, dup(myIntent, similar, shared, shared).v), model.NoteDuplicate)
 	if !slices.Equal(tools(n), []string{"discuss", "abandon", "dismiss"}) || len(optionFor(t, n, "abandon").Args) != 0 {

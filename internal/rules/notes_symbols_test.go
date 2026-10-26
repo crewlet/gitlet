@@ -280,6 +280,16 @@ func TestStale(t *testing.T) {
 	if !strings.HasPrefix(n.Title, "Main changed the signature of src/config.ts:parseConfig") {
 		t.Fatalf("title = %q", n.Title)
 	}
+	if !strings.Contains(n.Body, "fix your references") {
+		t.Fatalf("body = %q", n.Body)
+	}
+	// The stub I use landed: my branch already has main's change.
+	used := view().mine(item(myItem, myIntent, changes(cfgBreaking), refs(callCfg))).
+		main(myItem, model.Footprint{Symbols: []model.SymbolChange{cfgBreaking}})
+	n = one(t, eval(t, used.v), model.NoteStale)
+	if n.Severity != model.SeverityAct || !strings.Contains(n.Body, "nothing to fix") || strings.Contains(n.Options[0].Label, "fix") {
+		t.Fatalf("severity %s body %q label %q", n.Severity, n.Body, n.Options[0].Label)
+	}
 }
 
 func TestNewCallers(t *testing.T) {

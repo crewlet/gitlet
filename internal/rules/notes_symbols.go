@@ -338,11 +338,16 @@ func (c *ctx) stale(m *entry) {
 		}
 		n.Title = fmt.Sprintf("Main %s %s since your base; your code %s it", verbed(ch), ref, usesVerb(refs))
 		n.Body = "Update your branch and fix your references before you submit."
-		if !resolved {
+		why := "bring your branch up to date with main, then fix your references"
+		if mine, ok := m.changes[baseKey(ch)]; ok && outcome(mine) == outcome(ch) {
+			// The stub I use landed, or I made the same change.
+			n.Body = "Your branch already has this change, for example from a stub you use. Update your branch before you submit; there is nothing to fix."
+			why = "bring your branch up to date with main"
+		} else if !resolved {
 			n.Body = "Matched by method name only; update and check your references."
 		}
 		n.Evidence = append(describe("main", ch), "your references: "+sites(refs))
-		n.Options = []model.Option{optUpdate(n.ID, "bring your branch up to date with main, then fix your references")}
+		n.Options = []model.Option{optUpdate(n.ID, why)}
 		n.Version = version(n.Severity, "main:"+outcome(ch))
 		c.emit(n)
 	}

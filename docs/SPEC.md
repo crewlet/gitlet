@@ -712,7 +712,9 @@ Predicted conflicts run only for pairs whose changed files intersect, at most
   both items add a symbol with the same qualified name in one language family,
   whatever the path; or both add the same new file path.
 - Pairs that already have a `signature_clash` or `body_overlap` note get no
-  `duplicate` note.
+  `duplicate` note, and neither do pairs where one needs a symbol the other
+  changes or holds the claim on: they coordinate through it already, and a
+  stub one uses puts the other's change in both footprints.
 
 ### 10.3 Migrations and hot files
 
