@@ -64,8 +64,9 @@ shared git remote (GitHub or any git host): refs/gitlet/*, branches
 
 Requirements:
 
-- git 2.38 or later (for `git merge-tree --write-tree`; older versions work
-  with conflict prediction turned off);
+- git 2.38 or later (for `git merge-tree --write-tree`; 2.29 to 2.37 work
+  with conflict prediction and the merge checks turned off, and gitlet refuses
+  to run on anything older);
 - Go 1.26 and a C compiler, because the tree-sitter parsers use cgo;
 - optionally the GitHub CLI (`gh`), so `submit` can open pull requests.
 

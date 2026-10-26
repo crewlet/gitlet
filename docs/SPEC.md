@@ -903,9 +903,13 @@ The skill (installed by `gitlet init`) and the MCP server instructions say:
 
 ### 14.1 How gitlet runs git
 
-- Minimum git 2.38 (`merge-tree --write-tree`). `doctor` and engine start check
-  the version. On older git, `predicted_conflict` and the merge checks of
-  `submit` and `update` are disabled with a warning; nothing fails outright.
+- Minimum git 2.29 (`fetch --no-write-fetch-head --no-auto-maintenance`), and
+  2.38 for everything (`merge-tree --write-tree`). Opening a repository with
+  git older than 2.29 fails with an error that names both versions, so every
+  verb, `doctor` and the hooks say git is too old instead of failing later on
+  an option git does not know. `doctor` and engine start check the version.
+  On git 2.29 to 2.37, `predicted_conflict` and the merge checks of `submit`
+  and `update` are disabled with a warning; nothing else changes.
 - Every call runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`,
   `GCM_INTERACTIVE=never`, and stdin from `/dev/null`. When neither
   `GIT_SSH_COMMAND`, `GIT_SSH` nor `core.sshCommand` is set, ssh runs with

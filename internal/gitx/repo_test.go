@@ -266,6 +266,10 @@ func TestWorktrees(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("Worktrees =\n%+v\nwant\n%+v", got, want)
 	}
+	// Before git 2.36 there is no -z: fields end with newlines.
+	if got := parseWorktrees(gitRaw(t, f.dir, nil, "worktree", "list", "--porcelain"), "\n"); !slices.Equal(got, want) {
+		t.Fatalf("parseWorktrees(newline format) =\n%+v\nwant\n%+v", got, want)
+	}
 }
 
 func TestRemotesAndDefaultBranch(t *testing.T) {

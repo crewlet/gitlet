@@ -1,8 +1,8 @@
 // Package gitx is gitlet's only way to talk to git. It runs the git binary
-// (2.38 or later for merge checks) with a context, a fixed environment and
-// argument vectors, never through a shell, and turns its output into typed
-// values. docs/SPEC.md, section 14.1 lists the environment, flags and
-// timeouts every call uses.
+// (2.29 or later, 2.38 for merge checks) with a context, a fixed
+// environment and argument vectors, never through a shell, and turns its
+// output into typed values. docs/SPEC.md, section 14.1 lists the
+// environment, flags and timeouts every call uses.
 package gitx
 
 import (
@@ -20,8 +20,20 @@ const (
 	MinMinor = 38
 )
 
+// OldestMajor and OldestMinor are the oldest git gitlet runs on at all:
+// metadata fetches pass --no-write-fetch-head and --no-auto-maintenance,
+// which git 2.29 introduced. Open refuses older versions with ErrGitTooOld.
+const (
+	OldestMajor = 2
+	OldestMinor = 29
+)
+
 // ErrNotRepo is returned by Open outside a git work tree.
 var ErrNotRepo = errors.New("not inside a git work tree")
+
+// ErrGitTooOld is returned by Open when git is older than
+// OldestMajor.OldestMinor.
+var ErrGitTooOld = errors.New("git is too old for gitlet")
 
 // ErrNotFound is returned when a ref, revision or path does not exist.
 var ErrNotFound = errors.New("not found")

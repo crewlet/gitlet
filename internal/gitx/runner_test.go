@@ -35,6 +35,14 @@ func TestOpen(t *testing.T) {
 	if r, err := Open(bg, rel); err != nil || r.Root != f.dir || !filepath.IsAbs(r.GitDir) {
 		t.Fatalf("Open(%s) = %+v, %v", rel, r, err)
 	}
+	// Through a symlink, the paths are the real ones.
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(f.dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := Open(bg, filepath.Join(link, "sub")); err != nil || r.Root != f.dir || r.GitDir != filepath.Join(f.dir, ".git") || r.CommonDir != r.GitDir {
+		t.Fatalf("Open through a symlink = %+v, %v", r, err)
+	}
 
 	wt := filepath.Join(t.TempDir(), "wt")
 	f.git("worktree", "add", "-q", "-b", "wt", wt)
@@ -58,6 +66,33 @@ func TestOpen(t *testing.T) {
 	}
 	if _, err := Open(bg, filepath.Join(t.TempDir(), "missing")); err == nil || errors.Is(err, ErrNotRepo) {
 		t.Errorf("Open(missing dir) = %v, want a plain error", err)
+	}
+}
+
+// TestOpenOldGit pretends git is older than gitlet supports by seeding the
+// per-process version cache. It must not run in parallel with other tests.
+func TestOpenOldGit(t *testing.T) {
+	f := newFixture(t)
+	major, minor, err := f.repo.Version(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pretend := func(major, minor int) {
+		gitVersion.Lock()
+		gitVersion.known, gitVersion.major, gitVersion.minor = true, major, minor
+		gitVersion.Unlock()
+	}
+	t.Cleanup(func() { pretend(major, minor) })
+
+	pretend(OldestMajor, OldestMinor-1)
+	_, err = Open(bg, f.dir)
+	want := fmt.Sprintf("found %d.%d, need %d.%d or later", OldestMajor, OldestMinor-1, OldestMajor, OldestMinor)
+	if !errors.Is(err, ErrGitTooOld) || errors.Is(err, ErrNotRepo) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Open with git %d.%d = %v, want ErrGitTooOld saying %q", OldestMajor, OldestMinor-1, err, want)
+	}
+	pretend(OldestMajor, OldestMinor)
+	if _, err := Open(bg, f.dir); err != nil {
+		t.Fatalf("Open with git %d.%d = %v", OldestMajor, OldestMinor, err)
 	}
 }
 

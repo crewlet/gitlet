@@ -28,7 +28,12 @@ func open(ctx context.Context, dir string) (*Repo, error) {
 	}
 
 	probe := &Repo{Root: abs, env: baseEnv(true)}
-	out, err := probe.read(ctx, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir")
+	if err := probe.checkOldest(ctx); err != nil {
+		return nil, err
+	}
+	// --show-toplevel and --absolute-git-dir print absolute paths;
+	// --git-common-dir may be relative to the directory git ran in.
+	out, err := probe.read(ctx, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir")
 	if err != nil {
 		if s := stderrOf(err); strings.Contains(s, "not a git repository") || strings.Contains(s, "must be run in a work tree") {
 			return nil, fmt.Errorf("gitx: %s: %w", abs, ErrNotRepo)
@@ -42,7 +47,7 @@ func open(ctx context.Context, dir string) (*Repo, error) {
 	r := &Repo{
 		Root:      filepath.Clean(filepath.FromSlash(paths[0])),
 		GitDir:    filepath.Clean(filepath.FromSlash(paths[1])),
-		CommonDir: filepath.Clean(filepath.FromSlash(paths[2])),
+		CommonDir: canonicalDir(abs, paths[2]),
 	}
 
 	sshConfigured := os.Getenv("GIT_SSH_COMMAND") != "" || os.Getenv("GIT_SSH") != ""
@@ -56,6 +61,38 @@ func open(ctx context.Context, dir string) (*Repo, error) {
 	}
 	r.env = baseEnv(sshConfigured)
 	return r, nil
+}
+
+// canonicalDir makes a directory git printed absolute, relative to dir, the
+// directory git ran in, with symlinks resolved as in git's own absolute
+// paths, so the common dir of the main work tree equals its git dir.
+func canonicalDir(dir, p string) string {
+	p = filepath.FromSlash(p)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(dir, p)
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	return filepath.Clean(p)
+}
+
+// checkOldest refuses git older than OldestMajor.OldestMinor before any
+// newer option can fail in a way that hides the cause. A version gitx
+// cannot read is let through.
+func (r *Repo) checkOldest(ctx context.Context) error {
+	major, minor, err := r.version(ctx)
+	if err != nil {
+		if errors.Is(err, errBadVersion) {
+			return nil
+		}
+		return err
+	}
+	if major < OldestMajor || major == OldestMajor && minor < OldestMinor {
+		return fmt.Errorf("gitx: %w: found %d.%d, need %d.%d or later (%d.%d for conflict prediction and merge checks)",
+			ErrGitTooOld, major, minor, OldestMajor, OldestMinor, MinMajor, MinMinor)
+	}
+	return nil
 }
 
 // The git binary does not change while gitlet runs, so its version is
@@ -84,22 +121,24 @@ func (r *Repo) version(ctx context.Context) (int, int, error) {
 	return major, minor, nil
 }
 
+var errBadVersion = errors.New("unrecognized git version")
+
 // parseVersion reads "git version 2.43.0", "git version 2.39.3 (Apple
 // Git-146)", "git version 2.45.1.windows.1" and the like.
 func parseVersion(s string) (major, minor int, err error) {
 	rest, ok := strings.CutPrefix(strings.TrimSpace(s), "git version ")
 	fields := strings.Fields(rest)
 	if !ok || len(fields) == 0 {
-		return 0, 0, fmt.Errorf("gitx: unrecognized git version %q", s)
+		return 0, 0, fmt.Errorf("gitx: %w %q", errBadVersion, s)
 	}
 	parts := strings.Split(fields[0], ".")
 	if len(parts) < 2 {
-		return 0, 0, fmt.Errorf("gitx: unrecognized git version %q", s)
+		return 0, 0, fmt.Errorf("gitx: %w %q", errBadVersion, s)
 	}
 	major, err1 := strconv.Atoi(parts[0])
 	minor, err2 := strconv.Atoi(leadingDigits(parts[1]))
 	if err1 != nil || err2 != nil {
-		return 0, 0, fmt.Errorf("gitx: unrecognized git version %q", s)
+		return 0, 0, fmt.Errorf("gitx: %w %q", errBadVersion, s)
 	}
 	return major, minor, nil
 }
@@ -296,7 +335,7 @@ func (r *Repo) configGetAll(ctx context.Context, key string) ([]string, error) {
 }
 
 func (r *Repo) hooksDir(ctx context.Context) (string, error) {
-	out, err := r.read(ctx, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+	out, err := r.read(ctx, "rev-parse", "--git-path", "hooks")
 	if err != nil {
 		return "", err
 	}
@@ -313,10 +352,22 @@ func (r *Repo) abs(p string) string {
 }
 
 func (r *Repo) worktrees(ctx context.Context) ([]Worktree, error) {
-	out, err := r.exec(ctx, cmdOpts{timeout: timeoutRead}, "worktree", "list", "--porcelain", "-z")
+	// -z (git 2.36) keeps every path intact; older git ends each field with
+	// a newline instead.
+	args, sep := []string{"worktree", "list", "--porcelain", "-z"}, "\x00"
+	if ok, err := r.AtLeast(ctx, 2, 36); err == nil && !ok {
+		args, sep = args[:3], "\n"
+	}
+	out, err := r.exec(ctx, cmdOpts{timeout: timeoutRead}, args...)
 	if err != nil {
 		return nil, err
 	}
+	return parseWorktrees(string(out), sep), nil
+}
+
+// parseWorktrees reads git worktree list --porcelain output whose fields
+// end with sep. Bare repositories are left out.
+func parseWorktrees(out, sep string) []Worktree {
 	var (
 		list []Worktree
 		cur  *Worktree
@@ -328,7 +379,7 @@ func (r *Repo) worktrees(ctx context.Context) ([]Worktree, error) {
 		}
 		cur, bare = nil, false
 	}
-	for _, field := range strings.Split(string(out), "\x00") {
+	for _, field := range strings.Split(out, sep) {
 		key, val, _ := strings.Cut(field, " ")
 		switch key {
 		case "":
@@ -349,7 +400,7 @@ func (r *Repo) worktrees(ctx context.Context) ([]Worktree, error) {
 		}
 	}
 	flush()
-	return list, nil
+	return list
 }
 
 // gitDir returns the work tree's git dir, asking git when the Repo was not

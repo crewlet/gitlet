@@ -161,7 +161,7 @@ func (s *snapper) prepareIndex() error {
 	if s.parent == "" {
 		return nil // git treats a missing index file as empty
 	}
-	real, err := s.r.read(s.ctx, "rev-parse", "--path-format=absolute", "--git-path", "index")
+	real, err := s.r.read(s.ctx, "rev-parse", "--git-path", "index")
 	if err != nil {
 		return err
 	}
