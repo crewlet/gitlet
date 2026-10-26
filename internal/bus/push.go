@@ -117,6 +117,7 @@ func (b *Bus) recordPushed(ctx context.Context, ref, oid string, own bool) error
 	if !own {
 		return nil
 	}
+	delete(b.refused, ref)
 	if err := b.pushLog.SetLastPushed(ctx, ref, oid); err != nil {
 		return fmt.Errorf("record push of %s: %w", ref, err)
 	}
@@ -127,8 +128,9 @@ func (b *Bus) recordPushed(ctx context.Context, ref, oid string, own bool) error
 // lease on its old value (the oid last pushed; "" for create-only). A ref
 // whose lease is stale is adopted: its remote value is read and the update
 // retried once with a lease on it; a second stale lease means another
-// process writes as this agent (ErrIdentityCollision). It returns one error
-// per update, and an error for the push as a whole (transport, observer).
+// process writes as this agent (ErrIdentityCollision). Any other rejection
+// is remembered in b.refused. It returns one error per update, and an error
+// for the push as a whole (transport, observer). Callers hold b.writeMu.
 func (b *Bus) pushOwn(ctx context.Context, ups []leaseUpdate) ([]error, error) {
 	errs := make([]error, len(ups))
 	if err := b.writable(); err != nil {
@@ -158,6 +160,7 @@ func (b *Bus) pushOwn(ctx context.Context, ups []leaseUpdate) ([]error, error) {
 			retry = append(retry, leaseUpdate{ref: u.ref, oid: u.oid, old: remote})
 			retryAt = append(retryAt, i)
 		default:
+			b.refused[u.ref] = u.oid
 			errs[i] = rejected(u.ref, r, rep)
 		}
 	}
@@ -176,6 +179,7 @@ func (b *Bus) pushOwn(ctx context.Context, ups []leaseUpdate) ([]error, error) {
 		case r.Kind == gitx.RejectStale:
 			errs[i] = fmt.Errorf("%w: %s changed again while retrying", ErrIdentityCollision, u.ref)
 		default:
+			b.refused[u.ref] = u.oid
 			errs[i] = rejected(u.ref, r, rep)
 		}
 	}

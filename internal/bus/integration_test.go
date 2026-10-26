@@ -250,6 +250,52 @@ func TestGitWipOnDemand(t *testing.T) {
 	}
 }
 
+// TestGitRejectedWipNotFlushed: a snapshot a pre-receive hook declined is
+// not pushed again by later flushes.
+func TestGitRejectedWipNotFlushed(t *testing.T) {
+	ctx := context.Background()
+	g := newGitEnv(t)
+	repo := g.clone("a")
+	a := g.bus(repo, agentA)
+	// The hook counts the pushes that reach it and declines snapshots.
+	count := filepath.Join(g.dir, "pushes")
+	hook := "#!/bin/sh\necho >>'" + count + "'\nwhile read old new ref; do\n" +
+		"  case \"$ref\" in refs/gitlet/wip/*) echo 'GH013: secret detected' >&2; exit 1;; esac\ndone\n"
+	must(t, os.WriteFile(filepath.Join(g.remote, "hooks", "pre-receive"), []byte(hook), 0o755))
+	pushes := func() int {
+		data, err := os.ReadFile(count)
+		if errors.Is(err, os.ErrNotExist) {
+			return 0
+		}
+		must(t, err)
+		return strings.Count(string(data), "\n")
+	}
+
+	head, err := repo.RevParse(ctx, "HEAD")
+	must(t, err)
+	tree, err := repo.RevParse(ctx, "HEAD^{tree}")
+	must(t, err)
+	snap, err := repo.CommitTree(ctx, tree, []string{head}, "gitlet: snapshot", gitx.Identity{})
+	must(t, err)
+	var rej *RejectedError
+	if err := a.WriteWip(ctx, itemA, snap); !errors.As(err, &rej) || !strings.Contains(strings.Join(rej.Remote, " "), "GH013") {
+		t.Fatalf("WriteWip: %v, want a RejectedError with the hook's text", err)
+	}
+	if _, err := repo.RevParse(ctx, WipRef(agentA, itemA)); !errors.Is(err, gitx.ErrNotFound) {
+		t.Fatalf("local wip after the rejection: %v, want none", err)
+	}
+	before := pushes()
+	for range 3 {
+		must(t, a.Flush(ctx))
+	}
+	if n := pushes() - before; n != 0 {
+		t.Fatalf("Flush pushed the rejected snapshot %d times", n)
+	}
+	if g.remoteRef(WipRef(agentA, itemA)) != "" {
+		t.Fatal("rejected snapshot on the remote")
+	}
+}
+
 func TestGitPruneDeletedAgents(t *testing.T) {
 	ctx := context.Background()
 	g := newGitEnv(t)

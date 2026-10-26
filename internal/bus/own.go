@@ -140,9 +140,26 @@ func (b *Bus) writeWip(ctx context.Context, item model.ItemID, commit string) er
 	// publishOwn pushes the snapshot on its own, never batched with
 	// metadata (docs/SPEC.md, section 6.1).
 	if err := b.publishOwn(ctx, ref, commit); err != nil {
+		var rej *RejectedError
+		if errors.As(err, &rej) {
+			b.unwriteWip(ctx, ref, commit)
+		}
 		return fmt.Errorf("bus: push %s: %w", ref, err)
 	}
 	return nil
+}
+
+// unwriteWip moves a wip ref the remote rejected back to the snapshot last
+// pushed, or deletes it when none was, so that no later Flush, in this
+// process or another, pushes the rejected snapshot again. Unlike state and
+// outbox, the local wip ref is not the agent's state: the engine keeps its
+// snapshot and does not push the same tree again. Best effort: b.refused
+// already covers this process.
+func (b *Bus) unwriteWip(ctx context.Context, ref, rejected string) {
+	last, err := b.ownLease(ctx, ref)
+	if err == nil {
+		_, _ = b.swapLocal(ctx, ref, last, rejected)
+	}
 }
 
 func (b *Bus) deleteWip(ctx context.Context, item model.ItemID) error {
@@ -281,6 +298,12 @@ func (b *Bus) flush(ctx context.Context) error {
 			// Deleted while the remote was unreachable.
 			u = leaseUpdate{ref: ref, old: last}
 		default:
+			continue
+		}
+		if r, ok := b.refused[ref]; ok && r == u.oid {
+			// The remote rejected this very update (a hook, push protection,
+			// receive.denyDeletes) and would only reject it again. The next
+			// write of the ref is pushed as usual.
 			continue
 		}
 		if isWipRef(ref) {

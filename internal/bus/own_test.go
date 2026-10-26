@@ -291,6 +291,85 @@ func TestFlushDeletesRefsDeletedOffline(t *testing.T) {
 	}
 }
 
+// TestFlushSkipsRejectedWip: a snapshot the remote rejected is not pushed
+// again by Flush, in this process or another (docs/SPEC.md, section 6.1).
+func TestFlushSkipsRejectedWip(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	repo := e.clone()
+	log := &memPushLog{m: map[string]string{}}
+	b := e.bus(repo, agentA, withPushLog(log))
+	snap := e.store.commit("f.go", []byte("package f"), "gitlet: snapshot")
+	mustNoErr(t, b.WriteWip(ctx, itemA, snap))
+
+	e.remote.setReject(func(dst, cur string) (string, []string, bool) {
+		return "pre-receive hook declined", nil, isWipRef(dst)
+	})
+	var rej *RejectedError
+	snap2 := e.store.commit("f.go", []byte("package f // 2"), "gitlet: snapshot", snap)
+	if err := b.WriteWip(ctx, itemA, snap2); !errors.As(err, &rej) {
+		t.Fatalf("WriteWip: %v, want a RejectedError", err)
+	}
+	if got := repo.ref(WipRef(agentA, itemA)); got != snap {
+		t.Fatalf("local wip = %q, want it back at the published %q", got, snap)
+	}
+	snap3 := e.store.commit("g.go", []byte("package g"), "gitlet: snapshot")
+	if err := b.WriteWip(ctx, itemB, snap3); !errors.As(err, &rej) {
+		t.Fatalf("WriteWip of a new item: %v, want a RejectedError", err)
+	}
+	if got := repo.ref(WipRef(agentA, itemB)); got != "" {
+		t.Fatalf("local wip of a never published item = %q, want none", got)
+	}
+
+	before := len(repo.pushLog())
+	mustNoErr(t, b.Flush(ctx))
+	mustNoErr(t, e.bus(repo, agentA, withPushLog(log)).Flush(ctx))
+	if pushes := repo.pushLog()[before:]; len(pushes) != 0 {
+		t.Fatalf("Flush pushed the rejected snapshots again: %+v", pushes)
+	}
+}
+
+// TestFlushSkipsRejectedDocs: a state write or a deletion the remote
+// rejected is not retried by every Flush; the next write is pushed as usual.
+func TestFlushSkipsRejectedDocs(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	repo := e.clone()
+	b := e.bus(repo, agentA)
+	snap := e.store.commit("f.go", []byte("package f"), "gitlet: snapshot")
+	mustNoErr(t, b.WriteWip(ctx, itemA, snap))
+
+	// Like receive.denyNonFastForwards and receive.denyDeletes: every state
+	// update and every deletion is refused.
+	e.remote.setReject(func(dst, cur string) (string, []string, bool) {
+		return "denied", nil, dst == StateRef(agentA) || isWipRef(dst)
+	})
+	var rej *RejectedError
+	oid, err := b.WriteState(ctx, sampleState(agentA), "")
+	if !errors.As(err, &rej) || oid == "" || repo.ref(StateRef(agentA)) != oid {
+		t.Fatalf("WriteState = %q, %v; want the local write and a RejectedError", oid, err)
+	}
+	if err := b.DeleteWip(ctx, itemA); !errors.As(err, &rej) {
+		t.Fatalf("DeleteWip: %v, want a RejectedError", err)
+	}
+	before := len(repo.pushLog())
+	for range 3 {
+		mustNoErr(t, b.Flush(ctx))
+	}
+	if pushes := repo.pushLog()[before:]; len(pushes) != 0 {
+		t.Fatalf("Flush retried the rejected updates: %+v", pushes)
+	}
+
+	e.remote.setReject(nil)
+	st := sampleState(agentA)
+	st.Heartbeat = t0.Add(time.Minute)
+	oid2, err := b.WriteState(ctx, st, oid)
+	mustNoErr(t, err)
+	if e.remote.get(StateRef(agentA)) != oid2 {
+		t.Fatal("the next state write was not published")
+	}
+}
+
 func TestObserverMode(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)

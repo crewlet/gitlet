@@ -66,6 +66,10 @@ type impl struct {
 	// writeMu serializes writes of this agent's own refs within the process,
 	// so the local compare-and-swap, the push and the push log stay in step.
 	writeMu sync.Mutex
+	// refused maps an own ref to the value the remote last rejected for it
+	// ("" for a deletion), so Flush does not push that value again. Guarded
+	// by writeMu.
+	refused map[string]string
 
 	obsMu         sync.Mutex
 	observerSince time.Time // when a push was last refused for permission; zero when writable
@@ -90,6 +94,7 @@ func newBus(repo Repo, me model.AgentID, opt Options) *Bus {
 		fetchReuse:   opt.FetchReuse,
 		isNetwork:    gitx.IsNetwork,
 		isPermission: gitx.IsPermission,
+		refused:      map[string]string{},
 	}}
 	if b.mainBranch == "" {
 		b.mainBranch = "main"

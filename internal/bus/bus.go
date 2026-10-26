@@ -204,7 +204,8 @@ func (b *Bus) WriteOutbox(ctx context.Context, ob model.Outbox, seenOID string) 
 }
 
 // WriteWip points this agent's wip ref for item at commit and pushes it in a
-// push of its own. A rejection returns *RejectedError.
+// push of its own. A rejection returns *RejectedError and moves the local ref
+// back to the snapshot last pushed, so Flush never pushes the rejected one.
 func (b *Bus) WriteWip(ctx context.Context, item model.ItemID, commit string) error {
 	return b.writeWip(ctx, item, commit)
 }
@@ -218,6 +219,7 @@ func (b *Bus) DeleteOwn(ctx context.Context) error { return b.deleteOwn(ctx) }
 
 // Flush pushes own refs whose local oid differs from the last pushed one
 // (after the remote was unreachable), and recreates own refs the remote lost.
+// It skips an update the remote already rejected in this process.
 func (b *Bus) Flush(ctx context.Context) error { return b.flush(ctx) }
 
 // ---- claims ----
