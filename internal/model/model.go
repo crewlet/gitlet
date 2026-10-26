@@ -189,7 +189,9 @@ type Ref struct {
 	// Container is what a resolved ref's qualifier names inside Module, in
 	// the form of Symbol.Container: a type ("Config" for Config.load,
 	// Config::new or a Go method expression) or a Rust inline module. It is
-	// "" when the qualifier names the module itself, or there is none.
+	// "" when the qualifier names the module itself, or there is none. In
+	// JavaScript, "default" stands for the module's default export, whose
+	// own name the importer cannot see.
 	Container string `json:"container,omitempty"`
 
 	// Receiver is set by an extractor when the qualifier is the value a

@@ -26,9 +26,10 @@ import (
 //     is named like;
 //   - every other ref gets the module it most likely names, in the form
 //     model.ModulesOf uses, and the type its qualifier names in that module
-//     as Container (a class, a Go method expression's type, a Rust type or
-//     inline module). When the ref uses an aliased named import, its name
-//     becomes the imported name, so it can match the definition.
+//     as Container (a class, "default" for a JavaScript default export, a Go
+//     method expression's type, a Rust type or inline module). When the ref
+//     uses an aliased named import, its name becomes the imported name, so
+//     it can match the definition.
 //
 // Python and Rust modules the file imports by absolute path are kept even
 // when they are probably third-party: nothing in one file tells them apart
@@ -320,13 +321,21 @@ func (r *resolver) jsRef(ref model.Ref) (model.Ref, bool) {
 // names in the imported module; rest is the qualifier after the import. A
 // namespace import names the module itself. A named or default import names
 // a class when it is capitalized, and otherwise an exported object, whose
-// members are taken for the module's own functions.
+// members are taken for the module's own functions. A default import names
+// the class "default": the importer's name for it, as Cfg in
+// `import Cfg from './config'`, need not be the class's own, and the
+// matcher takes "default" for the module's default export.
 func jsContainer(im symbols.Import, rest string) string {
-	name := im.Local
-	if im.Kind == symbols.ImportNamed && im.Name != "" && im.Name != "default" {
-		name = im.Name
+	name, class := im.Local, upperFirst(im.Local)
+	switch {
+	case im.Kind == symbols.ImportNamespace:
+		return rest
+	case im.Kind == symbols.ImportDefault || im.Name == "default":
+		name = "default"
+	case im.Name != "":
+		name, class = im.Name, upperFirst(im.Name)
 	}
-	if im.Kind != symbols.ImportNamespace && upperFirst(name) {
+	if class {
 		return joinName(name, rest)
 	}
 	return rest

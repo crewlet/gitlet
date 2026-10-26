@@ -58,7 +58,7 @@ func matchRef(ref model.Ref, version int, sym model.Symbol, uniqueMethod bool) (
 		return member(sym) && uniqueMethod, false
 	}
 	if ref.Container != "" {
-		if lastSegment(ref.Container) != lastSegment(sym.Container) {
+		if lastSegment(ref.Container) != lastSegment(sym.Container) && !defaultExport(ref, sym) {
 			return false, false
 		}
 	} else if typeMember(sym) && version >= containerVersion {
@@ -93,6 +93,16 @@ func typeMember(s model.Symbol) bool {
 		return unicode.IsUpper(r)
 	}
 	return false
+}
+
+// defaultExport reports whether a JavaScript ref through a module's default
+// export may reach sym. The footprint package gives such a ref the container
+// "default", as the importer cannot see the exported class's own name, so
+// the ref reaches the members of any top-level class of the module (an
+// anonymous default class is named "default" itself).
+func defaultExport(ref model.Ref, sym model.Symbol) bool {
+	return ref.Container == "default" && model.LangFamily(ref.Lang) == "js" &&
+		typeMember(sym) && !strings.Contains(sym.Container, ".")
 }
 
 // lastSegment returns the last dot-separated segment of a container.
