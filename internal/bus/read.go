@@ -373,20 +373,24 @@ func (b *Bus) load(ctx context.Context) (*State, error) {
 			st.Skipped = append(st.Skipped, fmt.Sprintf("%s: too large (%d bytes, limit %d)", ref, size, MaxReadDoc))
 			continue
 		}
-		if err := st.add(d, oid, data); err != nil {
+		if err := st.add(ref, d, oid, data); err != nil {
 			st.Skipped = append(st.Skipped, ref+": "+err.Error())
 		}
 	}
 	return st, nil
 }
 
-// add decodes and validates one document into the state.
-func (st *State) add(d docRef, oid string, data []byte) error {
+// add decodes and validates one document, read from ref, into the state.
+// Footprint entries with invalid paths are skipped on their own.
+func (st *State) add(ref string, d docRef, oid string, data []byte) error {
 	switch d.kind {
 	case "state":
-		doc, err := decodeState(d.agent, data)
+		doc, dropped, err := decodeState(d.agent, data)
 		if err != nil {
 			return err
+		}
+		for _, s := range dropped {
+			st.Skipped = append(st.Skipped, ref+": "+s)
 		}
 		st.Agents[d.agent] = doc
 	case "outbox":

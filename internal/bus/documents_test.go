@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -14,7 +15,7 @@ func TestDocumentRoundTrip(t *testing.T) {
 	st := sampleState(agentA)
 	_, data, err := encodeState(agentA, st, t0)
 	mustNoErr(t, err)
-	got, err := decodeState(agentA, data)
+	got, _, err := decodeState(agentA, data)
 	mustNoErr(t, err)
 	st.Format = model.Format
 	if !reflect.DeepEqual(got, st) {
@@ -79,7 +80,7 @@ func TestDecodeFormat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := decodeState(agentA, []byte(tt.data))
+			_, _, err := decodeState(agentA, []byte(tt.data))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want it to mention %q", err, tt.want)
 			}
@@ -241,6 +242,64 @@ func TestEncodeStateDropsSettledItems(t *testing.T) {
 	}
 	if len(st.Items) != 3 {
 		t.Fatal("encodeState modified the caller's items")
+	}
+}
+
+// stateWithBadPaths is sampleState with a footprint entry of each kind
+// whose path git accepts but a document cannot carry, after a valid one.
+func stateWithBadPaths() model.AgentState {
+	st := sampleState(agentA)
+	fp := &st.Items[0].Footprint
+	fp.Files = append(fp.Files,
+		model.FileChange{Path: "Icon\r", Status: "M"},
+		model.FileChange{Path: "b.go", OldPath: "caf\xe9.go", Status: "R"})
+	sym := fp.Symbols[0]
+	sym.Symbol.Path = strings.Repeat("d/", 2100) + "x.ts"
+	fp.Symbols = append(fp.Symbols, sym)
+	fp.Refs = append(fp.Refs, model.Ref{Name: "f", Kind: model.RefCall, Path: "tab\there.go", Line: 1})
+	return st
+}
+
+func TestEncodeStateDropsBadPaths(t *testing.T) {
+	st := stateWithBadPaths()
+	_, data, err := encodeState(agentA, st, t0)
+	mustNoErr(t, err)
+	got, dropped, err := decodeState(agentA, data)
+	mustNoErr(t, err)
+	want := sampleState(agentA)
+	want.Format = model.Format
+	if !reflect.DeepEqual(got, want) || len(dropped) != 0 {
+		t.Fatalf("published state:\n got %+v\nwant %+v (dropped on read %q)", got, want, dropped)
+	}
+	if !reflect.DeepEqual(st, stateWithBadPaths()) {
+		t.Fatal("encodeState modified the caller's footprint")
+	}
+}
+
+func TestDecodeStateSkipsBadPaths(t *testing.T) {
+	st := stateWithBadPaths()
+	st.Format = model.Format
+	st.Items[0].Footprint.Files[2].OldPath = "../b.go" // invalid UTF-8 would not survive JSON
+	data, err := json.Marshal(st)
+	mustNoErr(t, err)
+	got, dropped, err := decodeState(agentA, data)
+	mustNoErr(t, err)
+	if fp := got.Items[0].Footprint; len(fp.Files) != 1 || len(fp.Symbols) != 1 || len(fp.Refs) != 1 {
+		t.Fatalf("footprint kept %d files, %d symbols, %d refs; want 1 each", len(fp.Files), len(fp.Symbols), len(fp.Refs))
+	}
+	want := []string{
+		`items[0].footprint.files[1]: invalid path "Icon\r"`,
+		`items[0].footprint.files[2]: invalid oldPath "../b.go"`,
+		`items[0].footprint.symbols[1]: invalid path`,
+		`items[0].footprint.refs[1]: invalid path "tab\there.go"`,
+	}
+	if len(dropped) != len(want) {
+		t.Fatalf("dropped = %q", dropped)
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(dropped[i], w) {
+			t.Errorf("dropped[%d] = %q, want prefix %q", i, dropped[i], w)
+		}
 	}
 }
 

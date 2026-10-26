@@ -12,7 +12,7 @@ import (
 func (b *Bus) readOwnState(ctx context.Context) (model.AgentState, string, error) {
 	var st model.AgentState
 	oid, err := b.readOwn(ctx, StateRef(b.me), stateFile, func(data []byte) (err error) {
-		st, err = decodeState(b.me, data)
+		st, _, err = decodeState(b.me, data)
 		return err
 	})
 	if err != nil {

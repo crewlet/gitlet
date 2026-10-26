@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -219,15 +220,78 @@ func decodeDoc(data []byte, v any) error {
 	return nil
 }
 
-func decodeState(agent model.AgentID, data []byte) (model.AgentState, error) {
+func decodeState(agent model.AgentID, data []byte) (model.AgentState, []string, error) {
 	var st model.AgentState
 	if err := decodeDoc(data, &st); err != nil {
-		return model.AgentState{}, err
+		return model.AgentState{}, nil, err
 	}
+	dropped := dropBadPaths(&st)
 	if err := validateState(agent, &st); err != nil {
-		return model.AgentState{}, err
+		return model.AgentState{}, nil, err
 	}
-	return st, nil
+	return st, dropped, nil
+}
+
+// dropBadPaths removes the footprint entries whose paths fail validPath and
+// describes each one removed. Git accepts such file names (a control
+// character as in macOS's "Icon\r", invalid UTF-8, more than 4096 bytes),
+// and one of them must not cost the whole document: a writer leaves the
+// entry out instead of refusing to publish its state, heartbeat included,
+// and a reader skips only the entry (docs/SPEC.md, section 5). The items
+// are copied before anything is removed, so the caller's slices are never
+// modified.
+func dropBadPaths(st *model.AgentState) []string {
+	var dropped []string
+	copied := false
+	for i := range st.Items {
+		fp := st.Items[i].Footprint
+		files, df := keepValidPaths(fp.Files, fmt.Sprintf("items[%d].footprint.files", i),
+			func(f *model.FileChange) (string, string) { return f.Path, f.OldPath })
+		syms, ds := keepValidPaths(fp.Symbols, fmt.Sprintf("items[%d].footprint.symbols", i),
+			func(s *model.SymbolChange) (string, string) { return s.Symbol.Path, s.OldPath })
+		refs, dr := keepValidPaths(fp.Refs, fmt.Sprintf("items[%d].footprint.refs", i),
+			func(r *model.Ref) (string, string) { return r.Path, "" })
+		if len(df)+len(ds)+len(dr) == 0 {
+			continue
+		}
+		if !copied {
+			st.Items, copied = slices.Clone(st.Items), true
+		}
+		st.Items[i].Footprint.Files, st.Items[i].Footprint.Symbols, st.Items[i].Footprint.Refs = files, syms, refs
+		dropped = slices.Concat(dropped, df, ds, dr)
+	}
+	return dropped
+}
+
+// keepValidPaths returns the entries of s whose path, and old path when
+// set, are valid, and a description of each entry left out, named
+// what[index]. s is returned as is when nothing is left out, and is never
+// modified.
+func keepValidPaths[T any](s []T, what string, paths func(*T) (path, oldPath string)) ([]T, []string) {
+	var kept []T
+	var dropped []string
+	for i := range s {
+		var why string
+		switch p, old := paths(&s[i]); {
+		case !validPath(p):
+			why = fmt.Sprintf("%s[%d]: invalid path %q", what, i, p)
+		case old != "" && !validPath(old):
+			why = fmt.Sprintf("%s[%d]: invalid oldPath %q", what, i, old)
+		}
+		switch {
+		case why != "":
+			if dropped == nil {
+				kept = slices.Clone(s[:i])
+			}
+			dropped = append(dropped, why)
+		case dropped != nil:
+			kept = append(kept, s[i])
+		}
+	}
+	if dropped == nil {
+		return s, nil
+	}
+	return kept, dropped
 }
 
 func decodeOutbox(agent model.AgentID, data []byte) (model.Outbox, error) {
@@ -265,14 +329,16 @@ func encodeDoc(v any) ([]byte, error) {
 }
 
 // encodeState prepares this agent's state for publishing: it sets the
-// format, drops items settled more than an hour ago (docs/SPEC.md, section
-// 6.4) and, when the document is still too large, every settled item. It
-// refuses with ErrTooLarge when that is not enough.
+// format, leaves out footprint entries with paths no reader accepts, drops
+// items settled more than an hour ago (docs/SPEC.md, section 6.4) and, when
+// the document is still too large, every settled item. It refuses with
+// ErrTooLarge when that is not enough.
 func encodeState(me model.AgentID, st model.AgentState, now time.Time) (model.AgentState, []byte, error) {
 	st.Format = model.Format
 	if st.Agent.ID == "" {
 		st.Agent.ID = me
 	}
+	dropBadPaths(&st)
 	if err := validateState(me, &st); err != nil {
 		return st, nil, fmt.Errorf("invalid state: %w", err)
 	}

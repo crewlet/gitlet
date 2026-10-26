@@ -287,7 +287,12 @@ The server's instructions summarize the workflow in section 13.
 - **Proposal id**: `p-` plus 12 random hex characters. **Message id**: 12
   random hex characters.
 - Every id and path read from a peer's document is validated against these
-  formats before use; anything else is skipped and reported.
+  formats before use; anything else is skipped and reported. A path is
+  valid when it is relative, clean, UTF-8, free of control characters and at
+  most 4096 bytes. Git accepts names that are not (macOS's `Icon\r`), so a
+  footprint entry with such a path costs only that entry: writers leave it
+  out of their state instead of refusing to publish, and readers skip it and
+  keep the rest of the document.
 
 ## 6. Refs on the remote
 

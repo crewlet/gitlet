@@ -61,6 +61,27 @@ func TestWriteStatePushesWithLease(t *testing.T) {
 	}
 }
 
+// TestWriteStateDropsBadPaths: a file name git accepts but a document
+// cannot carry costs only its footprint entry, never the heartbeat.
+func TestWriteStateDropsBadPaths(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	repo := e.clone()
+	b := e.bus(repo, agentA)
+	oid1, err := b.WriteState(ctx, stateWithBadPaths(), "")
+	mustNoErr(t, err)
+	if e.remote.get(StateRef(agentA)) != oid1 {
+		t.Fatal("state not pushed")
+	}
+	got, _, err := b.ReadOwnState(ctx)
+	mustNoErr(t, err)
+	want := sampleState(agentA)
+	want.Format = model.Format
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("published state:\n got %+v\nwant %+v", got, want)
+	}
+}
+
 func TestWriteStateLocalConflict(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)

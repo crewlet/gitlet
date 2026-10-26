@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -278,6 +279,33 @@ func TestLoadSkipsInvalidDocuments(t *testing.T) {
 	// Skipped documents still count for lease observation.
 	if st.Refs[StateRef("newer-agent-aaaaaa")] == "" {
 		t.Fatal("refs lack a skipped document")
+	}
+}
+
+// TestLoadSkipsBadFootprintEntries: one bad path in a peer's footprint
+// skips that entry, not the peer's whole state (docs/SPEC.md, section 5).
+func TestLoadSkipsBadFootprintEntries(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	st := sampleState(agentA)
+	st.Format = model.Format
+	st.Items[0].Footprint.Files = append(st.Items[0].Footprint.Files, model.FileChange{Path: "Icon\r", Status: "M"})
+	data, err := json.Marshal(st)
+	mustNoErr(t, err)
+	e.remote.set(StateRef(agentA), e.store.commit("state.json", data, "gitlet: state"))
+
+	b := e.bus(e.clone(), agentB)
+	_, err = b.Fetch(ctx)
+	mustNoErr(t, err)
+	loaded, err := b.Load(ctx)
+	mustNoErr(t, err)
+	got, ok := loaded.Agents[agentA]
+	if !ok || len(got.Items) != 1 || len(got.Items[0].Footprint.Files) != 1 {
+		t.Fatalf("peer state = %+v, %v; want it with the bad entry left out", got, ok)
+	}
+	want := StateRef(agentA) + `: items[0].footprint.files[1]: invalid path "Icon\r"`
+	if len(loaded.Skipped) != 1 || loaded.Skipped[0] != want {
+		t.Fatalf("skipped = %q, want %q", loaded.Skipped, want)
 	}
 }
 
