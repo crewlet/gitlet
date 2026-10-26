@@ -524,17 +524,18 @@ Definitions per language:
 | Language | Definitions | Container |
 |---|---|---|
 | Go | functions, methods, type specs (struct, interface, alias), top-level const and var specs | the receiver's base type for methods |
-| TypeScript / TSX / JavaScript | function declarations, classes, class methods and fields, interfaces, type aliases, enums, exported `const`/`let` bound to arrow functions or function expressions | the class or interface |
+| TypeScript / TSX / JavaScript | function declarations, classes, class methods, interfaces, type aliases, enums, top-level `const`/`let` bound to arrow functions or function expressions | the class |
 | Python | functions, classes, methods; module-level assignments to UPPER_CASE names | the class |
-| Rust | functions, structs, enums, traits, type aliases, consts, statics, methods in `impl` and `trait` blocks | the impl or trait type |
+| Rust | functions, structs, enums, traits, type aliases, consts, statics, methods in `impl` and `trait` blocks; items of inline modules, except `#[cfg(test)]` modules | the impl or trait type, or the inline module |
 
 Unique names within a file:
 
 - Python property accessors: `Class.x` for the getter, `Class.x@setter` and
-  `Class.x@deleter` for the others.
+  `Class.x@deleter` for the others. TypeScript accessors: `Class.x` for the
+  getter, `Class.x@set` for the setter.
 - Rust trait impl methods: `Type.method@Trait`.
-- TypeScript overload declarations merge into one symbol whose signature joins
-  all overload signatures.
+- TypeScript overload declarations and Python `@overload` stubs merge into the
+  implementation's symbol, whose signature joins all overload signatures.
 - Any remaining duplicate gets `#2`, `#3`, ... in source order (for example
   Go's several `init` functions).
 
@@ -636,8 +637,11 @@ dropped.
 
 A ref **matches** a symbol when they are in the same language family
 (TypeScript, TSX and JavaScript form one family), the names are equal, and
-the ref's module is one of the symbol's modules. In Go the symbol must also be
-exported, unless the ref is in the same package.
+the ref's module is one of the symbol's modules. For Go, Python and Rust, a
+module that ends with `/` plus the ref's module also matches, which covers
+`src/` layouts and repositories without a root `go.mod`. In Go the symbol
+must also be exported, unless the ref is in the same package. Refs to
+TypeScript path aliases and bare package specifiers are treated as external.
 
 ## 10. Rules
 
