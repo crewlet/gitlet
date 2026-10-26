@@ -191,7 +191,8 @@ type Ref struct {
 	// Config::new or a Go method expression) or a Rust inline module. It is
 	// "" when the qualifier names the module itself, or there is none. In
 	// JavaScript, "default" stands for the module's default export, whose
-	// own name the importer cannot see.
+	// own name the importer cannot see; an unqualified `new X()` through a
+	// default import carries it too.
 	Container string `json:"container,omitempty"`
 
 	// Receiver is set by an extractor when the qualifier is the value a
