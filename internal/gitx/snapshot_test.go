@@ -117,6 +117,34 @@ func TestSnapshot(t *testing.T) {
 	}
 }
 
+// The copy of the index keeps the real index's time, so the sweep of
+// another process must not take a snapshot in progress for one a crashed
+// process left.
+func TestRemoveStaleSnapsKeepsACopyOfAnOldIndex(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	head := f.commitFiles("base", map[string]string{"a.txt": "one\n"})
+	old := time.Now().Add(-2 * staleSnapAge)
+	if err := os.Chtimes(filepath.Join(f.repo.GitDir, "index"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(f.repo.GitDir, "gitlet")
+	os.MkdirAll(dir, 0o755)
+	tmp := filepath.Join(dir, fmt.Sprintf("snap-%d-%d.index", os.Getpid(), time.Now().UnixNano()))
+	s := &snapper{r: f.repo, ctx: bg, index: tmp, parent: head}
+	if err := s.prepareIndex(); err != nil {
+		t.Fatal(err)
+	}
+	removeStaleSnaps(dir, time.Now())
+	if _, err := os.Stat(tmp); err != nil {
+		t.Fatalf("the sweep removed a snapshot in progress: %v", err)
+	}
+	removeStaleSnaps(dir, time.Now().Add(2*staleSnapAge))
+	if _, err := os.Stat(tmp); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the sweep kept a temporary index past staleSnapAge: %v", err)
+	}
+}
+
 // A file rewritten at the same size and the same modification time as the
 // real index keeps the stat data the index cached for it. git still reads
 // its content, because the index is no older than the file ("racy git"),
@@ -283,10 +311,15 @@ func TestSnapshotConcurrentAndStaleLock(t *testing.T) {
 	f.commitFiles("base", map[string]string{"a.go": "package a\n"})
 	f.write("a.go", "package a // changed\n")
 	f.write("b.go", "package b\n")
-	// A lock left by a killed git must not block the next snapshot.
+	// Files a crashed process left are swept: a temporary index named by
+	// its start time and a lock in the older naming, dated by its mtime.
 	dir := filepath.Join(f.repo.GitDir, "gitlet")
 	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, fmt.Sprintf("snap-%d.index.lock", os.Getpid())), nil, 0o644)
+	old := time.Now().Add(-2 * staleSnapAge)
+	os.WriteFile(filepath.Join(dir, fmt.Sprintf("snap-1-%d.index", old.UnixNano())), nil, 0o644)
+	lock := filepath.Join(dir, fmt.Sprintf("snap-%d.index.lock", os.Getpid()))
+	os.WriteFile(lock, nil, 0o644)
+	os.Chtimes(lock, old, old)
 
 	var wg sync.WaitGroup
 	trees := make([]string, 6)

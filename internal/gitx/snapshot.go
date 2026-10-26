@@ -49,9 +49,8 @@ func isDenied(p string) bool {
 	return false
 }
 
-// snapLocks serializes snapshots that share a temporary index path, which
-// is per process and work tree.
-var snapLocks sync.Map // path -> *sync.Mutex
+// snapLocks serializes a process's snapshots of one work tree.
+var snapLocks sync.Map // scratch dir -> *sync.Mutex
 
 // staleSnapAge is the age after which a temporary index left behind by a
 // crashed process is removed.
@@ -66,14 +65,15 @@ func (r *Repo) snapshot(ctx context.Context, opt SnapshotOptions) (SnapshotResul
 	if err != nil {
 		return SnapshotResult{}, err
 	}
-	tmp := filepath.Join(dir, "snap-"+strconv.Itoa(os.Getpid())+".index")
-	mu, _ := snapLocks.LoadOrStore(tmp, new(sync.Mutex))
+	mu, _ := snapLocks.LoadOrStore(dir, new(sync.Mutex))
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
 
-	removeStaleSnaps(dir)
-	// Nothing else uses this path: a lock file here is left from a killed git.
-	os.Remove(tmp + ".lock")
+	removeStaleSnaps(dir, time.Now())
+	// The name says when the snapshot began: the copy of the index keeps
+	// the real index's older time (prepareIndex), so another process's
+	// sweep cannot go by the file's time.
+	tmp := filepath.Join(dir, fmt.Sprintf("snap-%d-%d.index", os.Getpid(), time.Now().UnixNano()))
 	defer os.Remove(tmp + ".lock")
 	defer os.Remove(tmp)
 
@@ -127,13 +127,36 @@ func (r *Repo) snapshotParent(ctx context.Context, rev string) (string, error) {
 	return oid, err
 }
 
-func removeStaleSnaps(dir string) {
+// removeStaleSnaps removes temporary indexes (and their locks) that crashed
+// processes left: those begun more than staleSnapAge before now, by the time
+// in their name, or by their modification time for names without one.
+func removeStaleSnaps(dir string, now time.Time) {
 	old, _ := filepath.Glob(filepath.Join(dir, "snap-*.index*"))
 	for _, p := range old {
-		if fi, err := os.Lstat(p); err == nil && time.Since(fi.ModTime()) > staleSnapAge {
+		began, ok := snapBegan(filepath.Base(p))
+		if !ok {
+			fi, err := os.Lstat(p)
+			if err != nil {
+				continue
+			}
+			began = fi.ModTime()
+		}
+		if now.Sub(began) > staleSnapAge {
 			os.Remove(p)
 		}
 	}
+}
+
+// snapBegan reads the start time from a temporary index name,
+// snap-<pid>-<unix nanoseconds>.index[.lock].
+func snapBegan(name string) (time.Time, bool) {
+	name, _, _ = strings.Cut(strings.TrimPrefix(name, "snap-"), ".")
+	_, nanos, ok := strings.Cut(name, "-")
+	n, err := strconv.ParseInt(nanos, 10, 64)
+	if !ok || err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(0, n), true
 }
 
 // snapper builds one snapshot in a temporary index.
