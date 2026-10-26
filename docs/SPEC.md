@@ -943,6 +943,10 @@ The skill (installed by `gitlet init`) and the MCP server instructions say:
     already exists and is not gitlet's is left alone, and `init` prints the
     line to add.
   - `--dry-run` prints the changes without writing.
+  - New entries run `gitlet`. An existing entry or hook that runs a gitlet
+    binary by another path (`/home/me/go/bin/gitlet`, for a client that does
+    not see gitlet on its PATH) keeps that path, so neither `init` nor
+    `doctor` undoes it.
 - **`gitlet doctor`** checks git's version, the remote, `gh`, the ledger and
   the client configs, and probes ref access: a create-only push of
   `refs/gitlet/probe/<agent>`, a non-fast-forward update, then a delete. It

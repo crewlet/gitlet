@@ -2,6 +2,7 @@ package install
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -14,10 +15,11 @@ import (
 
 const codexTable = "mcp_servers.gitlet"
 
-// editCodexConfig sets [mcp_servers.gitlet] in a Codex config. It returns a
+// editCodexConfig sets [mcp_servers.gitlet] in a Codex config, keeping a
+// gitlet binary its command already names (see binary). It returns a
 // reason instead when gitlet is already defined in a form it does not edit
 // (an inline table or dotted keys); the caller then reports a skip.
-func editCodexConfig(old []byte, bin string) (out []byte, skipReason string) {
+func editCodexConfig(old []byte, bin binary) (out []byte, skipReason string) {
 	text := string(old)
 	nl := "\n"
 	if strings.Contains(text, "\r\n") {
@@ -29,7 +31,7 @@ func editCodexConfig(old []byte, bin string) (out []byte, skipReason string) {
 		lines = strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	}
 	want := []tomlEntry{
-		{key: "command", value: tomlString(bin)},
+		{key: "command", value: tomlString(bin.name)},
 		{key: "args", value: `["mcp"]`},
 	}
 
@@ -63,6 +65,14 @@ func editCodexConfig(old []byte, bin string) (out []byte, skipReason string) {
 	var result []string
 	if target >= 0 {
 		t := tables[target]
+		for k := t.start + 1; k < t.end; k++ {
+			if tomlKey(lines[k], top[k]) != "command" {
+				continue
+			}
+			if raw, value, ok := tomlStringValue(lines[k]); ok && bin.command(value) == value {
+				want[0].value = raw // kept as written
+			}
+		}
 		result = append(result, lines[:t.start+1]...)
 		result = append(result, setTomlEntries(lines[t.start+1:t.end], top[t.start+1:t.end], want)...)
 		result = append(result, lines[t.end:]...)
@@ -138,6 +148,33 @@ func tomlHasValue(line, value string) bool {
 	rest, ok = strings.CutPrefix(strings.TrimSpace(rest), value)
 	rest = strings.TrimSpace(rest)
 	return ok && (rest == "" || strings.HasPrefix(rest, "#"))
+}
+
+// tomlStringValue returns the value of a single-line entry that holds a
+// basic or literal string, as written and as read; ok is false for any
+// other value.
+func tomlStringValue(line string) (raw, value string, ok bool) {
+	_, rest, found := strings.Cut(line, "=")
+	rest = strings.TrimSpace(rest)
+	switch {
+	case !found, strings.HasPrefix(rest, `"""`), strings.HasPrefix(rest, "'''"):
+	case strings.HasPrefix(rest, "'"):
+		if end := strings.IndexByte(rest[1:], '\''); end >= 0 {
+			return rest[:end+2], rest[1 : end+1], true
+		}
+	case strings.HasPrefix(rest, `"`):
+		for i := 1; i < len(rest); i++ {
+			switch rest[i] {
+			case '\\':
+				i++
+			case '"':
+				// Go reads every TOML escape but TOML 1.1's \e.
+				v, err := strconv.Unquote(rest[:i+1])
+				return rest[:i+1], v, err == nil
+			}
+		}
+	}
+	return "", "", false
 }
 
 // tomlTable is a table: its normalized name and the range of its lines.

@@ -101,7 +101,9 @@ gitlet doctor                    # check git, the remote, gh, the ledger and ref
 | Cursor | `.cursor/mcp.json` and `.cursor/rules/gitlet.mdc` |
 | `--git-hooks` | `prepare-commit-msg` (adds `Gitlet-Item` and `Gitlet-Agent` trailers), `post-commit` (prints new notes) and `pre-push` (prints the checks `submit` would make) |
 
-The agent client starts `gitlet mcp` itself. The remote must accept pushes of
+The agent client starts `gitlet mcp` itself. If it does not see gitlet on its
+PATH, set the full path (such as `/home/me/go/bin/gitlet`) in these files by
+hand; running `init` again keeps it. The remote must accept pushes of
 `refs/gitlet/*` from everyone who uses gitlet; `gitlet doctor` tests exactly
 that. Without any remote, gitlet still coordinates the worktrees of one clone
 through the shared `.git` directory.

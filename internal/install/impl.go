@@ -74,9 +74,9 @@ func install(ctx context.Context, opt Options) ([]Change, error) {
 	if err != nil {
 		return nil, err
 	}
-	bin := strings.TrimSpace(opt.Binary)
-	if bin == "" {
-		bin = defaultBinary
+	bin := binary{name: strings.TrimSpace(opt.Binary)}
+	if bin.name == "" {
+		bin = binary{name: defaultBinary, keep: true}
 	}
 	hooksDir := opt.HooksDir
 	if opt.GitHooks {
@@ -175,6 +175,41 @@ func chooseClients(root string, names []string) ([]string, error) {
 
 // ---- clients ----
 
+// binary is the gitlet command init writes into client configs and hooks.
+// Without Options.Binary it is "gitlet", but an entry that already starts
+// a gitlet binary of its own keeps it: someone set a path such as
+// /home/me/go/bin/gitlet on purpose, typically because the client does not
+// see gitlet on its PATH.
+type binary struct {
+	name string // for new entries
+	keep bool   // keep an existing entry's gitlet binary
+}
+
+// command returns the binary for an entry that now runs old ("" for a new
+// entry).
+func (b binary) command(old string) string {
+	if b.keep && isGitlet(old) {
+		return old
+	}
+	return b.name
+}
+
+// word is command for a shell command line: old and the result are words
+// in shell syntax.
+func (b binary) word(old string) string {
+	if b.keep && isGitlet(shellUnquote(old)) {
+		return old
+	}
+	return shellQuote(b.name)
+}
+
+// isGitlet reports whether a command names a gitlet binary: gitlet or
+// gitlet.exe, in any directory.
+func isGitlet(command string) bool {
+	base := command[strings.LastIndexAny(command, `/\`)+1:]
+	return base == defaultBinary || strings.EqualFold(base, defaultBinary+".exe")
+}
+
 // mcpServer is gitlet's MCP server entry, in the order the keys are written.
 func mcpServer(bin string, withType bool) []field {
 	var f []field
@@ -184,24 +219,24 @@ func mcpServer(bin string, withType bool) []field {
 	return append(f, field{"command", bin}, field{"args", []any{"mcp"}})
 }
 
-func claudeCodeFiles(root, bin string) []fileSpec {
+func claudeCodeFiles(root string, bin binary) []fileSpec {
 	mcp := filepath.Join(root, ".mcp.json")
 	settings := filepath.Join(root, ".claude", "settings.json")
 	return []fileSpec{
-		{mcp, 0o644, editJSON(mcp, mergeServer(mcpServer(bin, true)))},
+		{mcp, 0o644, editJSON(mcp, mergeServer(bin, true))},
 		{filepath.Join(root, ".claude", "skills", "gitlet", "SKILL.md"), 0o644, content(skill)},
 		{settings, 0o644, editJSON(settings, mergeClaudeHooks(bin))},
 	}
 }
 
-func codexFiles(root, bin string) []fileSpec {
+func codexFiles(root string, bin binary) []fileSpec {
 	agents := filepath.Join(root, "AGENTS.md")
 	return []fileSpec{
 		{filepath.Join(root, ".codex", "config.toml"), 0o644, func(old []byte, _ bool) ([]byte, error) {
 			out, skip := editCodexConfig(old, bin)
 			if skip != "" {
 				return nil, &skipError{
-					summary: fmt.Sprintf("%s = { command = %s, args = [\"mcp\"] }", codexTable, tomlString(bin)),
+					summary: fmt.Sprintf("%s = { command = %s, args = [\"mcp\"] }", codexTable, tomlString(bin.name)),
 					reason:  skip,
 				}
 			}
@@ -213,10 +248,10 @@ func codexFiles(root, bin string) []fileSpec {
 	}
 }
 
-func cursorFiles(root, bin string) []fileSpec {
+func cursorFiles(root string, bin binary) []fileSpec {
 	mcp := filepath.Join(root, ".cursor", "mcp.json")
 	return []fileSpec{
-		{mcp, 0o644, editJSON(mcp, mergeServer(mcpServer(bin, false)))},
+		{mcp, 0o644, editJSON(mcp, mergeServer(bin, false))},
 		{filepath.Join(root, ".cursor", "rules", "gitlet.mdc"), 0o644, content(cursorRule())},
 	}
 }
@@ -233,8 +268,9 @@ type field struct {
 }
 
 // mergeServer sets mcpServers.gitlet, keeping any other keys of the entry
-// (such as env) and every other server.
-func mergeServer(fields []field) func(*object) (bool, error) {
+// (such as env), a gitlet binary it already runs, and every other server.
+// withType adds "type": "stdio".
+func mergeServer(bin binary, withType bool) func(*object) (bool, error) {
 	return func(root *object) (bool, error) {
 		servers, added, err := childObject(root, "mcpServers", "mcpServers")
 		if err != nil {
@@ -245,7 +281,8 @@ func mergeServer(fields []field) func(*object) (bool, error) {
 			return false, err
 		}
 		changed := added || addedEntry
-		for _, f := range fields {
+		old, _ := entry.vals["command"].(string)
+		for _, f := range mcpServer(bin.command(old), withType) {
 			if v, ok := entry.get(f.key); !ok || !jsonEqual(v, f.value) {
 				entry.set(f.key, f.value)
 				changed = true
@@ -257,17 +294,19 @@ func mergeServer(fields []field) func(*object) (bool, error) {
 
 // mergeClaudeHooks adds gitlet's Claude Code hooks to settings. An event
 // that already runs gitlet's hook keeps its entry, with the command brought
-// up to date; other hooks are left alone. Like the git hooks, the commands
-// do nothing when gitlet is missing, since the settings are shared with
-// teammates who may not have it.
-func mergeClaudeHooks(bin string) func(*object) (bool, error) {
+// up to date (and the gitlet binary it runs kept); other hooks are left
+// alone. Like the git hooks, the commands do nothing when gitlet is
+// missing, since the settings are shared with teammates who may not have
+// it.
+func mergeClaudeHooks(bin binary) func(*object) (bool, error) {
 	return func(root *object) (bool, error) {
 		hooks, changed, err := childObject(root, "hooks", "hooks")
 		if err != nil {
 			return false, err
 		}
 		for _, h := range claudeHooks {
-			cmd := guarded(shellQuote(bin), "hook claude-code "+h.arg)
+			args := "hook claude-code " + h.arg
+			cmd := func(old string) string { return guarded(bin.word(hookBinary(old, "claude-code", h.arg)), args) }
 			groups, err := childArray(hooks, h.event, "hooks."+h.event)
 			if err != nil {
 				return false, err
@@ -287,19 +326,20 @@ func mergeClaudeHooks(bin string) func(*object) (bool, error) {
 					}
 					if c, _ := entry.vals["command"].(string); runsHook(c, "claude-code", h.arg) {
 						found = append(found, entry)
-						exact = exact || c == cmd
+						exact = exact || c == cmd(c)
 					}
 				}
 			}
 			switch {
 			case exact:
 			case len(found) > 0:
-				found[0].set("command", cmd)
+				c, _ := found[0].vals["command"].(string)
+				found[0].set("command", cmd(c))
 				changed = true
 			default:
 				entry := newObject()
 				entry.set("type", "command")
-				entry.set("command", cmd)
+				entry.set("command", cmd(""))
 				group := newObject()
 				if h.matcher != "" {
 					group.set("matcher", h.matcher)
@@ -323,6 +363,18 @@ func runsHook(command, client, event string) bool {
 		}
 	}
 	return false
+}
+
+// hookBinary returns the word, as written, before "hook <client> <event>"
+// in a shell command: the binary it runs. It is "" when there is none.
+func hookBinary(command, client, event string) string {
+	w := shellWords(command)
+	for i := 1; i+2 < len(w); i++ {
+		if w[i] == "hook" && w[i+1] == client && w[i+2] == event {
+			return w[i-1]
+		}
+	}
+	return ""
 }
 
 // editJSON turns a merge into a JSON object into an edit. An existing file
@@ -390,7 +442,7 @@ func replaceSection(path string, old []byte, section string) ([]byte, error) {
 
 // ---- git hooks ----
 
-func planGitHooks(dir, bin string) ([]plan, error) {
+func planGitHooks(dir string, bin binary) ([]plan, error) {
 	var plans []plan
 	for _, name := range gitHooks {
 		var foreign, calls bool
@@ -399,7 +451,13 @@ func planGitHooks(dir, bin string) ([]plan, error) {
 				foreign, calls = true, callsGitHook(old, name)
 				return old, nil
 			}
-			return []byte(hookScript(bin, name)), nil
+			var q string // the binary gitlet's own hook runs now
+			for _, l := range strings.Split(string(old), "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(l), "#") && q == "" {
+					q = hookBinary(l, "git", name)
+				}
+			}
+			return []byte(hookScript(bin.word(q), name)), nil
 		}})
 		if err != nil {
 			return nil, err
@@ -408,7 +466,7 @@ func planGitHooks(dir, bin string) ([]plan, error) {
 		case foreign && calls: // someone added gitlet's line by hand
 			p.change.Action = actUnchanged
 		case foreign:
-			p.change.Action, p.change.Summary = actSkip, hookLine(bin, name)
+			p.change.Action, p.change.Summary = actSkip, hookLine(bin.name, name)
 		case p.change.Action != actCreate && p.mode&0o111 != 0o111:
 			p.mode |= 0o111 // a hook runs only when executable
 			p.change.Action = actUpdate
@@ -418,10 +476,10 @@ func planGitHooks(dir, bin string) ([]plan, error) {
 	return plans, nil
 }
 
-// hookScript is the git hook gitlet installs. It never fails git: a missing
-// binary is skipped and every error is swallowed.
-func hookScript(bin, name string) string {
-	q := shellQuote(bin)
+// hookScript is the git hook gitlet installs, running the gitlet binary q
+// (in shell syntax). It never fails git: a missing binary is skipped and
+// every error is swallowed.
+func hookScript(q, name string) string {
 	return "#!/bin/sh\n" +
 		hookMarker + ` installed by "gitlet init". Run it again to update this file, or delete the file to remove the hook.` + "\n" +
 		"# It never fails git: it does nothing when gitlet is missing and ignores gitlet's errors.\n" +
@@ -568,6 +626,62 @@ func exists(path string) bool {
 func isDir(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.IsDir()
+}
+
+// shellWords splits a shell command at unquoted blanks and keeps each word
+// as written, quotes and backslashes included. Operators such as && are
+// words of their own only when blanks surround them, as in gitlet's hooks.
+func shellWords(s string) []string {
+	var words []string
+	var w strings.Builder
+	quote := byte(0) // the quote character of an open quoted part
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote == 0 && (c == ' ' || c == '\t' || c == '\n'):
+			if w.Len() > 0 {
+				words = append(words, w.String())
+				w.Reset()
+			}
+			continue
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote = c
+		case c == quote:
+			quote = 0
+		case c == '\\' && quote != '\'' && i+1 < len(s):
+			w.WriteByte(c)
+			i++
+			c = s[i]
+		}
+		w.WriteByte(c)
+	}
+	if w.Len() > 0 {
+		words = append(words, w.String())
+	}
+	return words
+}
+
+// shellUnquote removes the quotes and backslashes of a shell word, leaving
+// any expansions as they are: "$HOME/bin/gitlet" becomes $HOME/bin/gitlet.
+func shellUnquote(w string) string {
+	var b strings.Builder
+	quote := byte(0)
+	for i := 0; i < len(w); i++ {
+		c := w[i]
+		switch {
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote = c
+			continue
+		case c == quote:
+			quote = 0
+			continue
+		case c == '\\' && i+1 < len(w) && (quote == 0 || quote == '"' && strings.IndexByte("$`\"\\\n", w[i+1]) >= 0):
+			i++
+			c = w[i]
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // shellQuote quotes s for a POSIX shell when it needs it.

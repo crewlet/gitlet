@@ -149,6 +149,75 @@ func TestInstallBinary(t *testing.T) {
 	}
 }
 
+// TestInstallKeepsBinary: a gitlet binary someone set by hand, for a client
+// whose PATH lacks gitlet, survives init and doctor's dry run; only an
+// explicit Options.Binary replaces it.
+func TestInstallKeepsBinary(t *testing.T) {
+	root := t.TempDir()
+	hooks := filepath.Join(root, "hooks")
+	files := map[string]string{
+		".mcp.json":          `{"mcpServers": {"gitlet": {"type": "stdio", "command": "/home/me/go/bin/gitlet", "args": ["mcp"]}}}` + "\n",
+		".cursor/mcp.json":   `{"mcpServers": {"gitlet": {"command": "C:\\tools\\gitlet.exe", "args": ["mcp"]}}}` + "\n",
+		".codex/config.toml": "[mcp_servers.gitlet]\ncommand = '/home/me/go/bin/gitlet'\nargs = [\"mcp\"]\n",
+		".claude/settings.json": `{"hooks": {
+  "SessionStart": [{"hooks": [{"type": "command", "command": "\"$HOME/go/bin/gitlet\" hook claude-code session-start"}]}],
+  "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "command -v '/opt/my tools/gitlet' >/dev/null 2>&1 && '/opt/my tools/gitlet' hook claude-code user-prompt-submit || true"}]}],
+  "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/gitlet-wrapper hook claude-code post-tool-use"}]}]
+}}` + "\n",
+		"hooks/pre-push": hookScript("~/bin/gitlet", "pre-push"),
+	}
+	for rel, content := range files {
+		write(t, filepath.Join(root, rel), content, 0o755)
+	}
+	opt := Options{Root: root, Clients: []string{ClaudeCode, Codex, Cursor}, GitHooks: true, HooksDir: hooks}
+	if _, err := Install(context.Background(), opt); err != nil {
+		t.Fatal(err)
+	}
+	for rel, content := range files {
+		if rel == ".claude/settings.json" {
+			continue
+		}
+		if got := read(t, filepath.Join(root, rel)); got != content {
+			t.Errorf("%s =\n%s\nwant it unchanged:\n%s", rel, got, content)
+		}
+	}
+	settings := read(t, filepath.Join(root, ".claude", "settings.json"))
+	for _, want := range []string{
+		`"command": "command -v \"$HOME/go/bin/gitlet\" >/dev/null 2>&1 && \"$HOME/go/bin/gitlet\" hook claude-code session-start || true"`,
+		`"command": "command -v '/opt/my tools/gitlet' >/dev/null 2>&1 && '/opt/my tools/gitlet' hook claude-code user-prompt-submit || true"`,
+		`"command": "command -v gitlet >/dev/null 2>&1 && gitlet hook claude-code post-tool-use || true"`,
+	} {
+		if !strings.Contains(settings, want) {
+			t.Errorf("settings.json lacks %s:\n%s", want, settings)
+		}
+	}
+	// doctor's dry run finds nothing to do.
+	opt.DryRun = true
+	changes, err := Install(context.Background(), opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range changes {
+		if c.Action != actUnchanged {
+			t.Errorf("rerun: %s %s, want unchanged", c.Action, rel(root, c.Path))
+		}
+	}
+
+	// An explicit binary wins.
+	opt.DryRun, opt.Binary = false, "gitlet"
+	if _, err := Install(context.Background(), opt); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ rel, unwanted string }{
+		{".mcp.json", "/home/me"}, {".cursor/mcp.json", "tools"}, {".codex/config.toml", "/home/me"},
+		{".claude/settings.json", "$HOME"}, {".claude/settings.json", "my tools"}, {"hooks/pre-push", "~/bin"},
+	} {
+		if got := read(t, filepath.Join(root, c.rel)); strings.Contains(got, c.unwanted) {
+			t.Errorf("%s still has %q:\n%s", c.rel, c.unwanted, got)
+		}
+	}
+}
+
 func TestInstallDefaultClients(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -272,7 +341,7 @@ func TestInstallMerge(t *testing.T) {
         "hooks": [
           {
             "type": "command",
-            "command": "command -v gitlet >/dev/null 2>&1 && gitlet hook claude-code session-start || true",
+            "command": "command -v /old/path/gitlet >/dev/null 2>&1 && /old/path/gitlet hook claude-code session-start || true",
             "timeout": 5
           }
         ]
@@ -386,7 +455,7 @@ func TestGitHooks(t *testing.T) {
 	write(t, filepath.Join(dir, "pre-push"), foreign, 0o755)
 	byHand := "#!/bin/sh\nmake lint\ngitlet hook git post-commit || true\n"
 	write(t, filepath.Join(dir, "post-commit"), byHand, 0o755)
-	write(t, filepath.Join(dir, "prepare-commit-msg"), hookScript("/old/gitlet", "prepare-commit-msg"), 0o755)
+	write(t, filepath.Join(dir, "prepare-commit-msg"), "#!/bin/sh\n"+hookMarker+" an older version\n/old/gitlet hook git prepare-commit-msg \"$@\"\n", 0o755)
 
 	opt := Options{Root: root, Clients: []string{Cursor}, GitHooks: true, HooksDir: ".git/hooks"}
 	changes, err := Install(context.Background(), opt)
@@ -404,7 +473,7 @@ func TestGitHooks(t *testing.T) {
 	if read(t, filepath.Join(dir, "pre-push")) != foreign || read(t, filepath.Join(dir, "post-commit")) != byHand {
 		t.Error("a hook gitlet does not own was changed")
 	}
-	if got, want := read(t, filepath.Join(dir, "prepare-commit-msg")), hookScript("gitlet", "prepare-commit-msg"); got != want {
+	if got, want := read(t, filepath.Join(dir, "prepare-commit-msg")), hookScript("/old/gitlet", "prepare-commit-msg"); got != want {
 		t.Errorf("prepare-commit-msg =\n%s\nwant:\n%s", got, want)
 	}
 
@@ -472,7 +541,7 @@ func TestHookScriptNeverFails(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hook := filepath.Join(t.TempDir(), "pre-push")
-			write(t, hook, hookScript(tt.bin, "pre-push"), 0o755)
+			write(t, hook, hookScript(shellQuote(tt.bin), "pre-push"), 0o755)
 			cmd := exec.Command(sh, hook, "origin", "https://example.com/r.git")
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
@@ -708,7 +777,7 @@ GITLET_AGENT = "me"
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, skip := editCodexConfig([]byte(tt.old), tt.bin)
+			got, skip := editCodexConfig([]byte(tt.old), binary{name: tt.bin})
 			if tt.skip != "" {
 				if !strings.Contains(skip, tt.skip) {
 					t.Fatalf("skip = %q, want %q", skip, tt.skip)
@@ -721,8 +790,29 @@ GITLET_AGENT = "me"
 			if string(got) != tt.want {
 				t.Errorf("got:\n%s\nwant:\n%s", got, tt.want)
 			}
-			if again, _ := editCodexConfig(got, tt.bin); !bytes.Equal(again, got) {
+			if again, _ := editCodexConfig(got, binary{name: tt.bin}); !bytes.Equal(again, got) {
 				t.Errorf("second pass changed the file:\n%s", again)
+			}
+		})
+	}
+}
+
+// TestCodexConfigKeepsBinary: without an explicit binary, a command that
+// names a gitlet binary stays as written; any other command is replaced.
+func TestCodexConfigKeepsBinary(t *testing.T) {
+	bin := binary{name: "gitlet", keep: true}
+	for _, tt := range []struct{ name, command, want string }{
+		{"basic string", `"/home/me/go/bin/gitlet"   # mine`, `"/home/me/go/bin/gitlet"   # mine`},
+		{"literal string", `'C:\tools\gitlet.exe'`, `'C:\tools\gitlet.exe'`},
+		{"escapes", `"C:\\tools\\gitlet.exe"`, `"C:\\tools\\gitlet.exe"`},
+		{"not gitlet", `"/usr/bin/gitlet-wrapper"`, `"gitlet"`},
+		{"not a string", `["gitlet"]`, `"gitlet"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			old := "[mcp_servers.gitlet]\ncommand = " + tt.command + "\nargs = [\"mcp\"]\n"
+			got, skip := editCodexConfig([]byte(old), bin)
+			if want := "[mcp_servers.gitlet]\ncommand = " + tt.want + "\nargs = [\"mcp\"]\n"; skip != "" || string(got) != want {
+				t.Errorf("got (skip %q):\n%s\nwant:\n%s", skip, got, want)
 			}
 		})
 	}

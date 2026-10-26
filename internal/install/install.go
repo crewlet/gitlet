@@ -19,7 +19,7 @@ type Options struct {
 	Clients  []string // default: Detect(Root), or ClaudeCode when nothing is detected
 	GitHooks bool     // also install prepare-commit-msg, post-commit and pre-push
 	HooksDir string   // git hooks directory (gitx.Repo.HooksDir); required with GitHooks
-	Binary   string   // command used to start gitlet; default "gitlet"
+	Binary   string   // command used to start gitlet; default "gitlet", and an entry that runs a gitlet binary of its own keeps it
 	DryRun   bool
 }
 
