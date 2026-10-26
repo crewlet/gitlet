@@ -1,0 +1,1 @@
+- To land your work: `git fetch origin`, bring origin/main into your work (rebase or merge, your choice), resolve any conflicts, run the checks above, then `git push origin HEAD:main`. If the push is rejected because main moved, repeat these steps.

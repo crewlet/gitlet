@@ -1,0 +1,32 @@
+{
+  "signature": {
+    "about": "One agent changes a function's signature while the other writes new code, in new files, that calls it. The merge is textually clean and the build breaks.",
+    "a": "Add a read-only mode to package store. Change the signature of New to `func New(max int, readOnly bool) *Store`. In a read-only store, Put returns a new exported error `ErrReadOnly` (\"store: read only\") and changes nothing, and Delete changes nothing and returns false. Update every caller of New in the repository to pass false. Add a test.",
+    "b": "Add a new file store/seed.go to package store with `func FromPairs(pairs map[string]string, max int) (*Store, error)`, which makes a store with New and puts every pair into it, returning the first error from Put. Add a test for it in a new file store/seed_test.go.",
+    "check": ""
+  },
+  "samefunc": {
+    "about": "Both agents change the body of the same function.",
+    "a": "Make store.Put reject an empty key: add an exported `var ErrEmptyKey = errors.New(\"store: empty key\")` and return it from Put when key is empty, before taking any lock. Add a test.",
+    "b": "Make store.Put enforce the store's key limit: add an exported `var ErrFull = errors.New(\"store: full\")` and have Put return it when adding a new key would make the store hold more than max keys (max is set by New; zero or less means no limit). Updating an existing key is always allowed. Add a test.",
+    "check": ""
+  },
+  "duplicate": {
+    "about": "Both agents get the same task, worded differently.",
+    "a": "Add retries to client.Fetch: when a request fails with a transport error or a 5xx response, try again, making at most 3 attempts in total, with exponential backoff starting at 50ms. Return the last error if all attempts fail. Add a test.",
+    "b": "Make the kvsvc client resilient to flaky servers: client.Fetch should retry requests that fail (network errors or HTTP 5xx) with a growing delay starting at 50ms, at most 3 attempts in total, and give up with the last error after that. Add a test.",
+    "check": ""
+  },
+  "independent": {
+    "about": "Unrelated tasks, as a control: any coordination cost here is pure overhead.",
+    "a": "Add a `-version` flag to cmd/kvsvc that prints `kvsvc dev` and exits with status 0 without starting the server.",
+    "b": "Add a method `func (s *Store) Len() int` to package store that returns the number of keys. Add a test.",
+    "check": "out=$(timeout 120 go run ./cmd/kvsvc -version) && [ \"$out\" = \"kvsvc dev\" ]"
+  },
+  "signature_v1": {
+    "about": "First version of the signature scenario, used in the first pass only: it resembled the example in gitlet's skill too closely.",
+    "a": "In package config, add strict parsing to Load. Change its signature to `func Load(path string, strict bool) (*Config, error)`: with strict true, a key that Config does not know is an error naming the key and line; with strict false, unknown keys are ignored as today. Update every caller in the repository to pass false. Add a test.",
+    "b": "In package config, add `func LoadAndValidate(path string) (*Config, error)` that loads the file with Load and then runs Validate, returning the validation error if any. Then add a `check FILE` subcommand to cmd/kvctl that calls config.LoadAndValidate and prints `ok` or the error (exit status 1 on error). Add a test for LoadAndValidate.",
+    "check": ""
+  }
+}
