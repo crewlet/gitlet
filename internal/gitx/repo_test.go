@@ -228,7 +228,7 @@ func TestHooksDir(t *testing.T) {
 	if got, err := f.repo.HooksDir(bg); err != nil || got != filepath.Join(f.dir, ".githooks") {
 		t.Errorf("HooksDir(relative hooksPath) = %q, %v", got, err)
 	}
-	abs := filepath.Join(t.TempDir(), "hooks")
+	abs := filepath.Join(realTempDir(t), "hooks")
 	f.git("config", "core.hooksPath", abs)
 	if got, err := f.repo.HooksDir(bg); err != nil || got != abs {
 		t.Errorf("HooksDir(absolute hooksPath) = %q, %v", got, err)
@@ -249,7 +249,7 @@ func TestWorktrees(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	head := f.commit("one")
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	f.git("worktree", "add", "-q", "-b", "feature", filepath.Join(tmp, "feature"))
 	f.git("worktree", "add", "-q", "--detach", filepath.Join(tmp, "detached"))
 

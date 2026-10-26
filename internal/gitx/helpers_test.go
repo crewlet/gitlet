@@ -64,6 +64,17 @@ type fixture struct {
 	repo *Repo
 }
 
+// realTempDir is t.TempDir with symlinks resolved, as git reports paths
+// (on macOS the temporary directory lives under the /var symlink).
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // newFixture creates an empty repository on main.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()

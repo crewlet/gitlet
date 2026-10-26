@@ -106,9 +106,10 @@ func TestRebaseClean(t *testing.T) {
 	f.commitFiles("drop me", map[string]string{"stub.txt": "stub\n"})
 	f.commitFiles("keep me", map[string]string{"k.txt": "k\n"})
 
-	// The sequence editor rewrites the todo, as gitlet's hook does.
+	// The sequence editor rewrites the todo, as gitlet's hook does. Newer git
+	// versions write "pick <oid> # <subject>".
 	script := filepath.Join(t.TempDir(), "editor.sh")
-	err := os.WriteFile(script, []byte("#!/bin/sh\nsed -e 's/^pick \\([0-9a-f]*\\) drop me$/drop \\1 drop me/' \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"\n"), 0o755)
+	err := os.WriteFile(script, []byte("#!/bin/sh\nsed -e 's/^pick \\([0-9a-f]*\\) \\(# \\)\\{0,1\\}drop me$/drop \\1 drop me/' \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"\n"), 0o755)
 	if err != nil {
 		t.Fatal(err)
 	}
