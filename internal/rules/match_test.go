@@ -178,6 +178,32 @@ func TestMatchOlderFootprint(t *testing.T) {
 	}
 }
 
+// Gitlets recorded containers before footprints recorded their version, so
+// a footprint without a version whose refs carry a container counts as
+// containerVersion, and only one with no container at all as older.
+func TestFootprintVersion(t *testing.T) {
+	plain := ref("load", "python", "app.py", 1, "cfg")
+	classCall := plain
+	classCall.Qualifier, classCall.Container = "Config", "Config"
+	tests := []struct {
+		name string
+		fp   model.Footprint
+		want int
+	}{
+		{"no version, no refs", model.Footprint{}, 0},
+		{"no version, no container", model.Footprint{Refs: []model.Ref{plain}}, 0},
+		{"no version, a container", model.Footprint{Refs: []model.Ref{plain, classCall}}, containerVersion},
+		{"a version, no container", model.Footprint{Version: 3, Refs: []model.Ref{plain}}, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FootprintVersion(tt.fp); got != tt.want {
+				t.Fatalf("FootprintVersion = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBaseKeyAndOldSymbol(t *testing.T) {
 	s := fn("go", "a/b.go", "Load", "func Load()")
 	if got := baseKey(sigChange(s, "func Load(int)", true)); got != s.Key {

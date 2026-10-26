@@ -153,13 +153,19 @@ func Similarity(a, b string, corpus []string) (score float64, shared int) {
 	return similarity(a, b, corpus)
 }
 
-// Match says whether ref, from a footprint of the given Footprint.Version,
-// refers to sym (docs/SPEC.md, section 9.6). resolved is false when the
-// match relies only on a unique method name, in which case uniqueMethod
-// must be true for a match.
+// Match says whether ref, from a footprint whose FootprintVersion is
+// version, refers to sym (docs/SPEC.md, section 9.6). resolved is false
+// when the match relies only on a unique method name, in which case
+// uniqueMethod must be true for a match.
 func Match(ref model.Ref, version int, sym model.Symbol, uniqueMethod bool) (match, resolved bool) {
 	return matchRef(ref, version, sym, uniqueMethod)
 }
+
+// FootprintVersion returns the version Match goes by for the refs of fp:
+// its Footprint.Version, or the first version whose refs record their
+// container when fp has no version but its refs record containers all the
+// same.
+func FootprintVersion(fp model.Footprint) int { return footprintVersion(fp) }
 
 // HotFile classifies a path: "lockfile", "changelog", or "".
 func HotFile(path string) string { return hotFile(path) }

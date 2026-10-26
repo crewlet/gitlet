@@ -22,7 +22,20 @@ var (
 	newCfg    = model.Ref{Name: "Config", Kind: model.RefConstruct, Lang: "typescript", Path: "src/app.ts", Line: 40, Module: "src/config", Resolved: true}
 	pyInit    = fn("python", "pkg/config.py", "Config.__init__", "def __init__(self, path)")
 	callPyCfg = ref("Config", "python", "pkg/app.py", 5, "pkg/config")
+
+	storeGet       = fn("go", "internal/store/store.go", "Store.Get", "func (*Store) Get(string) ([]byte, error)")
+	storeGetStrict = sigChange(storeGet, "func (*Store) Get(string, bool) ([]byte, error)", true)
+	callPkgGet     = model.Ref{Name: "Get", Qualifier: "store", Kind: model.RefCall, Lang: "go", Path: "cmd/a.go", Line: 3, Module: "internal/store", Resolved: true}
 )
+
+// olderCallerView has bob's item make refs from a footprint an older gitlet
+// stored without a version, while my item breaks Store.Get. A ref with a
+// container, as loadCall("Config"), shows that gitlet recorded containers,
+// so the package call callPkgGet names the package and reaches no method.
+func olderCallerView(rs ...model.Ref) *vb {
+	return view().mine(item(myItem, myIntent, changes(storeGetStrict))).
+		peer(bob, item(bobItem, bobIntent, refs(rs...), olderFootprint()))
+}
 
 // loadCall is a resolved static call Config.load() into src/config, with
 // the container the resolver gave it.
@@ -170,6 +183,8 @@ func TestCallersAffected(t *testing.T) {
 		{"unresolved method", view().mine(item(myItem, myIntent, changes(sigChange(loadM, "load(): void", true)))).
 			peer(bob, item(bobItem, bobIntent, refs(callLoadM))).v, model.SeverityInfo},
 		{"lapsed caller", mine(cfgBreaking).lapsed(bob, t0.Add(-time.Hour)).v, model.SeverityWarn},
+		{"package call from an older gitlet that recorded containers", olderCallerView(callPkgGet, loadCall("Config")).v, model.SeverityInfo},
+		{"package call from an older gitlet before containers", olderCallerView(callPkgGet).v, model.SeverityAct},
 	})
 
 	tests := []struct {

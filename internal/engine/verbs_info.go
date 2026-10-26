@@ -1251,10 +1251,10 @@ func referencesTarget(fp model.Footprint, defs []model.Symbol, counts map[string
 		return "", false
 	}
 	var places []string
-	seen := map[string]bool{}
+	seen, version := map[string]bool{}, rules.FootprintVersion(fp)
 	for _, ref := range fp.Refs {
 		for _, d := range defs {
-			if ok, _ := rules.Match(ref, fp.Version, d, counts[d.Name] <= 1); !ok {
+			if ok, _ := rules.Match(ref, version, d, counts[d.Name] <= 1); !ok {
 				continue
 			}
 			place := fmt.Sprintf("%s %s at %s:%d", refVerb(ref.Kind), d.Qualified, ref.Path, ref.Line)

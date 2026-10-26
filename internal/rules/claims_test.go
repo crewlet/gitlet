@@ -23,6 +23,7 @@ func TestAutoClaims(t *testing.T) {
 		{"breaking change clashes", clashView(cfgBreaking, bobSig).v, []string{cfg.Key}, "clashes with codex-ci-bbbbbb"},
 		{"compatible change", callers(cfgCompat, refs(callCfg)).v, nil, ""},
 		{"unresolved references never claim", callers(sigChange(loadM, "load(): void", true), refs(callLoadM)).v, nil, ""},
+		{"package call from an older gitlet that recorded containers never claims", olderCallerView(callPkgGet, loadCall("Config")).v, nil, ""},
 		{"nobody references it", callers(cfgBreaking).v, nil, ""},
 		{"removed symbols have nothing to publish", callers(removedChange(cfg), refs(callCfg)).v, nil, ""},
 		{"already claimed by me", callers(cfgBreaking, refs(callCfg)).claim(cfg.Key, me, myItem, 0).v, nil, ""},

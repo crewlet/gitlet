@@ -2,6 +2,7 @@ package rules
 
 import (
 	"path"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -15,8 +16,19 @@ import (
 // they did then.
 const containerVersion = 2
 
+// footprintVersion implements FootprintVersion. Gitlets recorded containers
+// before footprints recorded their version, so a footprint without one is
+// taken for older than containerVersion only when none of its refs has a
+// container.
+func footprintVersion(fp model.Footprint) int {
+	if fp.Version < containerVersion && slices.ContainsFunc(fp.Refs, func(r model.Ref) bool { return r.Container != "" }) {
+		return containerVersion
+	}
+	return fp.Version
+}
+
 // matchRef implements Match (docs/SPEC.md, section 9.6). version is the
-// Footprint.Version of the footprint ref comes from.
+// footprintVersion of the footprint ref comes from.
 //
 // A resolved ref matches when the language families and names agree, its
 // module is one of the symbol's modules, and it reaches the symbol's

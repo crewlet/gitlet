@@ -572,8 +572,8 @@ A footprint records the version of the algorithm that computed it
 (`version`), which goes up whenever the same two commits could give another
 footprint. A footprint stored on my item by an older version is computed
 again even when its head and base stay, and cached footprints are keyed by
-version too. A footprint without a version comes from before refs recorded
-their container (section 9.6).
+version too. A footprint without a version comes from an older gitlet, which
+may already have recorded the containers of its refs (section 9.6).
 
 ### 9.1 Snapshots
 
@@ -784,10 +784,13 @@ taken for the module's own functions. The importer's name for a default
 export need not be its own (`import Cfg from './config'` for
 `export default class Config`), so a capitalized default import reaches
 what any top-level class or namespace of its module holds, but not the
-module's own functions. The refs of a footprint older than version 2,
-which other agents' older gitlets still publish, carry no container
-whatever their qualifier named, so they reach every symbol of their name
-in their module, members included.
+module's own functions. Refs recorded their container (from version 2)
+before footprints recorded their version, so a footprint without a
+version, which other agents' older gitlets still publish, counts as
+version 2 when any of its refs carries a container. Otherwise, as in a
+footprint older than version 2, its refs carry no container whatever
+their qualifier named, so they reach every symbol of their name in their
+module, members included.
 
 Building an instance names the class, while its parameters belong to the
 constructor, a method of its own. So a resolved `new X(...)` in TypeScript

@@ -202,9 +202,9 @@ func (c *ctx) uniqueName(s model.Symbol) bool {
 // matching returns the refs of fp that refer to sym, and whether any of
 // them matched through a resolved module rather than a unique method name.
 func (c *ctx) matching(fp model.Footprint, sym model.Symbol) (out []model.Ref, resolved bool) {
-	unique := c.uniqueName(sym)
+	unique, version := c.uniqueName(sym), footprintVersion(fp)
 	for _, r := range fp.Refs {
-		if ok, res := matchRef(r, fp.Version, sym, unique); ok {
+		if ok, res := matchRef(r, version, sym, unique); ok {
 			out = append(out, r)
 			resolved = resolved || res
 		}
