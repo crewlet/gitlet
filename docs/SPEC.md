@@ -971,6 +971,9 @@ The skill (installed by `gitlet init`) and the MCP server instructions say:
   agents see them in their output. `post-commit` stays silent for commits a
   rebase, cherry-pick or revert replays: `use` and `update` run those with
   hooks on and drop their output, so the notes wait for the verb's result.
+  gitlet runs its own rebases, cherry-picks and reverts with
+  `GITLET_INTERNAL=1`, and both hooks do nothing when it is set, so the
+  replayed commits keep the trailers they already have.
 - `gitlet hook sequence-editor <todo>` rewrites a rebase todo for `update`.
 
 ### 14.3 Setup

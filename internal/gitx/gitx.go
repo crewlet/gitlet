@@ -8,11 +8,21 @@ package gitx
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
 // ZeroOID is git's all-zero object id.
 const ZeroOID = "0000000000000000000000000000000000000000"
+
+// IsZeroOID reports whether oid is the all-zero id of either hash, as git
+// blame shows for lines not committed yet.
+func IsZeroOID(oid string) bool { return oid != "" && strings.Trim(oid, "0") == "" }
+
+// InternalEnv is set to 1 in the environment of the rebases, cherry-picks
+// and reverts gitx runs, so gitlet's own commit hooks leave the commits they
+// replay alone.
+const InternalEnv = "GITLET_INTERNAL"
 
 // MinMajor and MinMinor are the git version merge checks need.
 const (

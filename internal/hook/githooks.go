@@ -52,6 +52,10 @@ func (r *runner) git(ctx context.Context, args []string) {
 // (docs/SPEC.md, section 12.5; see pickItem). args are git's: the file, then
 // the message source and a commit.
 func (r *runner) prepareCommitMsg(ctx context.Context, args []string) error {
+	if r.getenv(gitx.InternalEnv) != "" {
+		// gitlet's own rebase, cherry-pick or revert (see replayed).
+		return nil
+	}
 	file, source := args[0], ""
 	if len(args) > 1 {
 		source = args[1]
@@ -119,6 +123,9 @@ func commentPrefix(ctx context.Context, repo *gitx.Repo) string {
 // rest, and every other new note, stay new for the next result or hook.
 // Commits git replays print nothing (see replayed).
 func (r *runner) postCommit(ctx context.Context) error {
+	if r.getenv(gitx.InternalEnv) != "" {
+		return nil
+	}
 	dir, err := r.getwd()
 	if err != nil {
 		return err

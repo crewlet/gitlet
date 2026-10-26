@@ -120,6 +120,7 @@ func (r *Repo) apply(ctx context.Context, op string, args, env []string) (ApplyR
 		return ApplyResult{}, fmt.Errorf("gitx: %s: %s in progress: %w", op, cur, ErrBusy)
 	}
 
+	env = append([]string{InternalEnv + "=1"}, env...)
 	_, runErr := r.exec(ctx, worktreeOpts(env), args...)
 
 	// From here on the caller's cancellation no longer counts.

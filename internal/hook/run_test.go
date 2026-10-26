@@ -150,6 +150,31 @@ func TestPrepareCommitMsgSkipsSources(t *testing.T) {
 	}
 }
 
+func TestCommitHooksSkipGitletsOwnReplays(t *testing.T) {
+	for _, args := range [][]string{
+		{"git", "prepare-commit-msg", "", "message"},
+		{"git", "post-commit"},
+	} {
+		t.Run(args[1], func(t *testing.T) {
+			args, file := withMessageFile(t, args)
+			r, dirs, stdout, stderr := recordingRunner("")
+			r.getenv = func(k string) string {
+				if k == gitx.InternalEnv {
+					return "1"
+				}
+				return ""
+			}
+			if code := r.run(context.Background(), args); code != 0 {
+				t.Fatalf("exit %d", code)
+			}
+			if len(*dirs) > 0 || stdout.Len()+stderr.Len() > 0 {
+				t.Fatalf("opened %q, stdout %q, stderr %q", *dirs, stdout, stderr)
+			}
+			assertMessage(t, file, "Add strict mode\n")
+		})
+	}
+}
+
 func TestNeverFails(t *testing.T) {
 	// ledgerRepo returns a repository whose ledger file exists but is empty.
 	ledgerRepo := func(t *testing.T) *gitx.Repo {

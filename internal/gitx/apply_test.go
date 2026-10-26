@@ -221,6 +221,47 @@ func TestCherryPickAndRevert(t *testing.T) {
 	}
 }
 
+func TestApplyMarksItsCommitsInternal(t *testing.T) {
+	t.Parallel()
+	f := divergent(t, map[string]string{"a.txt": "1\n"},
+		map[string]string{"m.txt": "m\n"},
+		map[string]string{"stub.go": "package stub\n"})
+	hooks := t.TempDir()
+	seen := filepath.Join(t.TempDir(), "seen")
+	script := "#!/bin/sh\necho \"$1 ${" + InternalEnv + ":-unset}\" >> '" + seen + "'\n"
+	for _, name := range []string{"prepare-commit-msg", "post-commit"} {
+		if err := os.WriteFile(filepath.Join(hooks, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.git("config", "core.hooksPath", hooks)
+
+	res, err := f.repo.CherryPick(bg, f.git("rev-parse", "feature"))
+	if err != nil || !res.OK {
+		t.Fatalf("CherryPick = %+v, %v", res, err)
+	}
+	if res, err = f.repo.Revert(bg, res.Head); err != nil || !res.OK {
+		t.Fatalf("Revert = %+v, %v", res, err)
+	}
+	f.git("switch", "-q", "feature")
+	if res, err = f.repo.Rebase(bg, RebaseOptions{Upstream: "main"}); err != nil || !res.OK {
+		t.Fatalf("Rebase = %+v, %v", res, err)
+	}
+	data, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("hooks ran %d times: %q", len(lines), data)
+	}
+	for _, l := range lines {
+		if !strings.HasSuffix(l, " 1") {
+			t.Errorf("a hook ran without %s=1: %q", InternalEnv, l)
+		}
+	}
+}
+
 func TestSwitchAndCreateBranch(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
