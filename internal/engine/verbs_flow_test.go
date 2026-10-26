@@ -1506,6 +1506,42 @@ func TestFlowStartLeavesAFinishedBranchAfterCleanup(t *testing.T) {
 	}
 }
 
+// A provisional item is one gitlet opened for the branch the agent was on:
+// abandoning it does not make that branch a finished task's.
+func TestFlowStartStaysAfterAbandoningAProvisionalItem(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	runGit(t, f.a, "switch", "-q", "-c", "feature-x")
+	groundwork := flowCommit(t, f.a, "feature: groundwork", "feature.go", "package config\n\nfunc Feature() int { return 1 }\n")
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	writeFile(t, f.a, "feature.go", "package config\n\nfunc Feature() int { return 2 }\n")
+	must(t, ea.Tick(ctx))
+	var prov model.WorkItem
+	flowLocked(ea, func() { prov, _ = ea.activeItem() })
+	if !prov.Provisional || prov.Branch != "feature-x" {
+		t.Fatalf("no provisional item on feature-x: %+v", prov)
+	}
+	clk.Advance(time.Minute)
+	ab, err := ea.Abandon(ctx, api.AbandonInput{Reason: "not a task yet"})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+
+	clk.Advance(time.Minute)
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Finish the feature"})
+	must(t, err)
+	flowWant(t, "start after abandoning the provisional item", r.Result, api.OK)
+	if head := runGit(t, f.a, "rev-parse", "HEAD"); r.Data.NewBranch || r.Data.Branch != "feature-x" || head != groundwork {
+		t.Fatalf("start: branch %q (new %v) at %s, want to stay on feature-x at %s; details %v", r.Data.Branch, r.Data.NewBranch, head, groundwork, r.Details)
+	}
+	flowLocked(ea, func() {
+		if _, ok, err := ea.led.Get(ctx, ea.finishedKey("feature-x")); err != nil || ok {
+			t.Errorf("the ledger takes feature-x for a finished task's branch (%v)", err)
+		}
+	})
+}
+
 // ---- abandon ----
 
 func TestFlowAbandon(t *testing.T) {

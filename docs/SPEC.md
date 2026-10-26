@@ -465,7 +465,9 @@ A work item is one task on one branch in one worktree.
   carrying uncommitted changes along. On another branch it stays there,
   unless that branch belongs to a submitted or closed item of mine: then it
   creates the new branch the same way but from main, not HEAD, so the new
-  task neither builds on that item's commits nor pushes into its PR.
+  task neither builds on that item's commits nor pushes into its PR. A
+  provisional item never makes a branch its own, even once abandoned: gitlet
+  opened it for the branch the agent was already on.
   Uncommitted changes that main's version of their files would overwrite are
   refused, with `git stash` as the way out. Its result lists:
   - active items with similar intent (section 10.2),

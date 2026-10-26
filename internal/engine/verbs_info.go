@@ -217,7 +217,8 @@ func (e *Engine) activeRefusal(it model.WorkItem) api.Result {
 // (submitted, landed or abandoned), preferring a submitted one. A new task
 // never stays on such a branch. Items closed long ago are no longer in my
 // state; the ledger remembers their branches (rememberFinished) for as long
-// as the branch still holds the commit it had then.
+// as the branch still holds the commit it had then. A provisional item does
+// not count: gitlet opened it on its own for the branch the agent was on.
 func (e *Engine) finishedBranchItem(ctx context.Context, branch string) (model.WorkItem, bool) {
 	var found model.WorkItem
 	ok := false
@@ -225,7 +226,7 @@ func (e *Engine) finishedBranchItem(ctx context.Context, branch string) (model.W
 		return found, false
 	}
 	for _, it := range e.myState().Items {
-		if it.Branch == branch && it.Status != model.ItemActive && (!ok || it.Status.Open()) {
+		if it.Branch == branch && it.Status != model.ItemActive && !it.Provisional && (!ok || it.Status.Open()) {
 			found, ok = it, true
 		}
 	}
@@ -263,11 +264,12 @@ func (e *Engine) finishedKey(branch string) string {
 
 // rememberFinished records the branch of an item that landed or was
 // abandoned, so start still leaves it after the item is trimmed from my
-// state. Best effort: without it start only knows recent items.
+// state. A provisional item's branch was never its own and is left out.
+// Best effort: without it start only knows recent items.
 func (e *Engine) rememberFinished(ctx context.Context, id model.ItemID) {
 	items := e.myState().Items
 	i := itemIndex(items, id)
-	if i < 0 || items[i].Branch == "" || items[i].Branch == e.cfg.Main || e.led.ReadOnly() {
+	if i < 0 || items[i].Provisional || items[i].Branch == "" || items[i].Branch == e.cfg.Main || e.led.ReadOnly() {
 		return
 	}
 	it := items[i]
