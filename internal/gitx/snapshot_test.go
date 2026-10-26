@@ -117,6 +117,41 @@ func TestSnapshot(t *testing.T) {
 	}
 }
 
+// In a partial clone, PushExcluded must not fetch what the clone lacks: the
+// remote's heads it was given, or blobs left out by the clone's filter.
+func TestPushExcludedDoesNotFetchIntoAPartialClone(t *testing.T) {
+	t.Parallel()
+	up := newFixture(t)
+	up.commitFiles("base", map[string]string{"a.txt": "a\n", "big.bin": strings.Repeat("x", 4096)})
+	up.commitFiles("more", map[string]string{"big.bin": strings.Repeat("y", 4096)})
+	remote := newBare(t)
+	gitIn(t, remote, nil, "config", "uploadpack.allowFilter", "true")
+	up.git("remote", "add", "origin", remote)
+	up.git("push", "-q", "origin", "main")
+	up.git("switch", "-q", "-c", "other")
+	up.commitFiles("other", map[string]string{"o.txt": "o\n"})
+	up.git("push", "-q", "origin", "other")
+	otherHead := up.git("rev-parse", "HEAD")
+
+	dir := filepath.Join(t.TempDir(), "partial")
+	gitIn(t, filepath.Dir(dir), nil, "clone", "-q", "--filter=blob:none", "--single-branch", "--branch", "main", "file://"+remote, dir)
+	f := openFixture(t, dir)
+	f.git("switch", "-q", "-c", "task")
+	f.commitFiles("task", map[string]string{".env.local": "SECRET=1\n"})
+	promisor := func() int {
+		packs, _ := filepath.Glob(filepath.Join(f.repo.GitDir, "objects", "pack", "*.promisor"))
+		return len(packs)
+	}
+	before := promisor()
+	got, err := f.repo.PushExcluded(bg, f.git("rev-parse", "HEAD"), []string{"refs/remotes/origin/", otherHead}, 1024)
+	if err != nil || !slices.Equal(got, []string{".env.local"}) {
+		t.Errorf("PushExcluded = %q, %v; want .env.local", got, err)
+	}
+	if after := promisor(); after != before {
+		t.Errorf("PushExcluded fetched into the partial clone: %d promisor packs, had %d", after, before)
+	}
+}
+
 // The copy of the index keeps the real index's time, so the sweep of
 // another process must not take a snapshot in progress for one a crashed
 // process left.

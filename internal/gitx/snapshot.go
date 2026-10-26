@@ -457,17 +457,21 @@ func (r *Repo) pushExcluded(ctx context.Context, commit string, published []stri
 			revs = append(revs, "^"+oid)
 		}
 	}
+	// Nothing here fetches what a partial clone lacks: an object the clone
+	// does not have is not one a push from it sends.
+	noFetch := []string{"GIT_NO_LAZY_FETCH=1"}
 	if len(oids) > 0 {
 		// The remote's tips this clone does not have cannot be walked, and
-		// nothing local builds on them.
-		out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(oids, "\n") + "\n")}, "cat-file", "--batch-check=%(objectname) %(objecttype)")
+		// nothing local builds on them. --missing also keeps a partial clone
+		// from fetching each of them, which GIT_NO_LAZY_FETCH does only on
+		// newer git.
+		out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(oids, "\n") + "\n"), env: noFetch},
+			"rev-list", "--no-walk", "--missing=allow-any", "--ignore-missing", "--stdin")
 		if err != nil {
 			return nil, err
 		}
-		for _, l := range lines(string(out)) {
-			if oid, typ, _ := strings.Cut(l, " "); typ == "commit" {
-				revs = append(revs, "^"+oid)
-			}
+		for _, oid := range lines(string(out)) {
+			revs = append(revs, "^"+oid)
 		}
 	}
 	// The tips go through stdin: a clone can track many refs. Commits are
@@ -481,14 +485,15 @@ func (r *Repo) pushExcluded(ctx context.Context, commit string, published []stri
 			commits = append(commits, l)
 		}
 	}}
-	_, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(revs, "\n") + "\n"), stdout: list}, "rev-list", "--objects", "--stdin")
+	_, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(revs, "\n") + "\n"), stdout: list, env: noFetch},
+		"rev-list", "--objects", "--missing=allow-any", "--stdin")
 	if err != nil {
 		return nil, mapNotFound(err, commit)
 	}
 	if len(commits) == 0 || len(objects) == 0 {
 		return nil, nil
 	}
-	out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(objects, "\n") + "\n")}, "cat-file", "--batch-check")
+	out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(objects, "\n") + "\n"), env: noFetch}, "cat-file", "--batch-check")
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +530,7 @@ func (r *Repo) pushExcluded(ctx context.Context, commit string, published []stri
 			found[field] = true
 		}
 	}}
-	_, err = r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(commits, "\n") + "\n"), stdout: diff},
+	_, err = r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(commits, "\n") + "\n"), stdout: diff, env: noFetch},
 		"diff-tree", "--stdin", "-r", "-m", "--root", "--no-renames", "--no-commit-id", "-z", "--diff-filter=AMT")
 	if err != nil {
 		return nil, err
