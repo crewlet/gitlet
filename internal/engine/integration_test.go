@@ -500,12 +500,10 @@ func TestVerbRefreshRule(t *testing.T) {
 	}
 }
 
-func TestVerbRefreshBudget(t *testing.T) {
-	requireDeps(t)
-	f := newFixture(t)
-	ctx := ctxT(t)
-
-	// A git daemon that accepts connections and never answers.
+// hangingRemote returns the URL of a git daemon that accepts connections
+// and never answers.
+func hangingRemote(t *testing.T) string {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("no loopback listener: %v", err)
@@ -531,7 +529,14 @@ func TestVerbRefreshBudget(t *testing.T) {
 		ln.Close()
 		conns.Wait()
 	})
-	runGit(t, f.a, "remote", "set-url", "origin", "git://"+ln.Addr().String()+"/remote.git")
+	return "git://" + ln.Addr().String() + "/remote.git"
+}
+
+func TestVerbRefreshBudget(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	runGit(t, f.a, "remote", "set-url", "origin", hangingRemote(t))
 
 	clk := newClock()
 	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
@@ -587,6 +592,59 @@ func TestVerbRefreshBudget(t *testing.T) {
 	r = status(4, 5*time.Second)
 	if slowWarning(r) || r.OfflineSince != nil {
 		t.Errorf("after a good fetch: offline %v, warnings %q", r.OfflineSince, r.Warnings)
+	}
+}
+
+// A push of own refs cut short by the caller's budget says nothing about
+// the remote (docs/SPEC.md, section 14.1): neither a verb's write nor the
+// tick's flush marks it offline, and the flush is tried again.
+func TestOwnPushOutOfBudgetIsNotOffline(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Work against a slow remote"})
+	must(t, err)
+	if r.Outcome != api.OK {
+		t.Fatalf("start: %s %q", r.Outcome, r.Summary)
+	}
+	runGit(t, f.a, "remote", "set-url", "origin", hangingRemote(t))
+	online := func(what string) {
+		t.Helper()
+		if _, off := ea.poll.snapshot(); off != nil {
+			t.Fatalf("%s marked the remote offline (since %v)", what, off)
+		}
+		ea.poll.mu.Lock()
+		need := ea.poll.needFlush
+		ea.poll.mu.Unlock()
+		if !need {
+			t.Fatalf("%s asked for no flush", what)
+		}
+	}
+
+	clk.Advance(10 * time.Second)
+	flowLocked(ea, func() {
+		wctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		defer cancel()
+		_, err = ea.mutateState(wctx, func(*model.AgentState) error { return nil })
+	})
+	must(t, err)
+	online("a write cut short by the verb's budget")
+	flowLocked(ea, func() {
+		fctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		defer cancel()
+		ea.flushIfNeeded(fctx)
+	})
+	online("a flush cut short by the tick's budget")
+
+	// The next tick that reaches the remote pushes the state.
+	runGit(t, f.a, "remote", "set-url", "origin", f.remote)
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	ref := bus.StateRef(ea.Agent().ID)
+	if remote, local := runGit(t, f.remote, "rev-parse", ref), runGit(t, f.a, "rev-parse", ref); remote != local {
+		t.Errorf("state on the remote at %s, local at %s", remote, local)
 	}
 }
 

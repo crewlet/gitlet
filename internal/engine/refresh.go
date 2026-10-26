@@ -227,7 +227,9 @@ func (e *Engine) applyFetch(ctx context.Context, res bus.FetchResult) error {
 
 // flushIfNeeded pushes own refs written while the remote was unreachable
 // (bus.Flush), once a poll has succeeded again. Tick runs it within its
-// budget; verbs leave it to Tick. Callers hold e.mu.
+// budget; verbs leave it to Tick. A flush that budget cuts short is tried
+// again by the next tick: it says nothing about the remote (docs/SPEC.md,
+// section 14.1). Callers hold e.mu.
 func (e *Engine) flushIfNeeded(ctx context.Context) {
 	if e.readOnly() || !e.poll.takeFlush() {
 		return
@@ -235,7 +237,7 @@ func (e *Engine) flushIfNeeded(ctx context.Context) {
 	if err := e.bus.Flush(ctx); err != nil {
 		e.log.Debug("flush", "err", err)
 		switch {
-		case gitx.IsNetwork(err) || errBudget(err):
+		case gitx.IsNetwork(err):
 			e.poll.markOffline(e.now())
 		case !onlyRejected(err):
 			// The bus skips updates the remote rejected, so only other
