@@ -163,6 +163,8 @@ func TestResolveTypeScript(t *testing.T) {
 		{name: "new of a default import builds the default export", path: file, ref: "Cfg", kind: model.RefConstruct, imports: []symbols.Import{dflt("Cfg", "./cfg")}, want: "Cfg src/app/cfg, default export"},
 		{name: "new of default as a named import builds the default export", path: file, ref: "Cfg", kind: model.RefConstruct, imports: []symbols.Import{nm("Cfg", "default", "./cfg")}, want: "Cfg src/app/cfg, default export"},
 		{name: "new of an aliased named import uses the imported name", path: file, ref: "C", kind: model.RefConstruct, imports: []symbols.Import{nm("C", "Config", "./cfg")}, want: "Config src/app/cfg"},
+		{name: "new of a require binding builds the module's export", path: file, ref: "Cfg", kind: model.RefConstruct, imports: []symbols.Import{ns("Cfg", "./cfg")}, want: "Cfg src/app/cfg, default export"},
+		{name: "call of a require binding", path: file, ref: "load", imports: []symbols.Import{ns("load", "./load")}, want: "load src/app/load"},
 		{name: "specifier with an extension", path: file, ref: "u", imports: []symbols.Import{nm("u", "u", "./util.js")}, want: "u src/app/util"},
 		{name: "directory specifier", path: file, ref: "x", imports: []symbols.Import{nm("x", "x", ".")}, want: "x src/app"},
 		{name: "parent specifier", path: file, ref: "x", imports: []symbols.Import{nm("x", "x", "..")}, want: "x src"},

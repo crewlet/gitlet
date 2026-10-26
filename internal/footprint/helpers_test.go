@@ -250,6 +250,9 @@ func summarizeRefs(refs []model.Ref) []string {
 		if !r.Resolved {
 			mod = "?"
 		}
+		if r.DefaultExport {
+			mod += " default export"
+		}
 		out = append(out, fmt.Sprintf("%s:%d %s %s", r.Path, r.Line, name, mod))
 	}
 	return out

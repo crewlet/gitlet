@@ -195,9 +195,10 @@ type Ref struct {
 	Container string `json:"container,omitempty"`
 
 	// DefaultExport is set on a resolved JavaScript `new X()` whose X is a
-	// default import: the importer's name for the module's default export,
-	// which need not be the class's own. Container stays "", so gitlets
-	// that predate the field still match X by name.
+	// default import, or the binding of a CommonJS require or a TypeScript
+	// `import X = require()`: the importer's name for what the module
+	// exports, which need not be the class's own. Container stays "", so
+	// gitlets that predate the field still match X by name.
 	DefaultExport bool `json:"defaultExport,omitempty"`
 
 	// Receiver is set by an extractor when the qualifier is the value a

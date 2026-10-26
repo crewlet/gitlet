@@ -30,8 +30,8 @@ import (
 //     method expression's type, a Rust type or inline module). When the ref
 //     uses an aliased named import, its name becomes the imported name, so
 //     it can match the definition. A JavaScript `new` of a default import
-//     keeps the importer's name and no container, and is marked
-//     DefaultExport.
+//     or a namespace binding (const X = require(...)) keeps the importer's
+//     name and no container, and is marked DefaultExport.
 //
 // Python and Rust modules the file imports by absolute path are kept even
 // when they are probably third-party: nothing in one file tells them apart
@@ -292,11 +292,13 @@ func (r *resolver) jsRef(ref model.Ref) (model.Ref, bool) {
 			return dropped()
 		}
 		switch {
-		case im.Kind == symbols.ImportDefault || im.Name == "default":
+		case im.Kind == symbols.ImportDefault || im.Name == "default" || im.Kind == symbols.ImportNamespace:
 			// `new Cfg()` builds the module's default export, whose own
-			// name need not be Cfg (jsContainer). It is marked rather
-			// than given a container, which older gitlets refuse a class
-			// for.
+			// name need not be Cfg (jsContainer). Through a namespace
+			// binding it builds what a CommonJS or `export =` module
+			// exports, as `new` of an ES namespace object is a TypeError.
+			// It is marked rather than given a container, which older
+			// gitlets refuse a class for.
 			ref.DefaultExport = ref.Kind == model.RefConstruct
 		case im.Kind == symbols.ImportNamed && im.Name != "":
 			ref.Name = im.Name

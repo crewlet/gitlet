@@ -106,6 +106,24 @@ func TestIntegrationTypeScript(t *testing.T) {
 	})
 }
 
+// A `new` of a default import, a CommonJS require binding or a TypeScript
+// `import = require()` builds what the module exports, whatever the
+// importer calls it.
+func TestIntegrationTypeScriptNewOfAnExport(t *testing.T) {
+	res := computeReal(t, "",
+		change{status: "A", path: "src/a.ts", head: "import Cfg from './config';\nnew Cfg('x');\n"},
+		change{status: "A", path: "src/b.js", head: "const Cfg = require('./config');\nnew Cfg('x');\n"},
+		change{status: "A", path: "src/c.ts", head: "import Cfg = require('./config');\nnew Cfg('x');\n"},
+		change{status: "A", path: "src/d.ts", head: "import { Config as C } from './config';\nnew C('x');\n"},
+	)
+	checkLines(t, "refs", summarizeRefs(res.Footprint.Refs), []string{
+		"src/a.ts:2 Cfg src/config default export",
+		"src/b.js:2 Cfg src/config default export",
+		"src/c.ts:2 Cfg src/config default export",
+		"src/d.ts:2 Config src/config", // a named export goes by its own name
+	})
+}
+
 func TestIntegrationTypeScriptVisibility(t *testing.T) {
 	const base = "export class Service {\n  private log(): void {}\n  protected tick(): void {}\n  run(): void {}\n}\n"
 	const head = "export class Service {\n  protected log(): void {}\n  private tick(): void {}\n  run(a?: string): void {}\n}\n"

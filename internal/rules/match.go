@@ -121,12 +121,12 @@ func typeMember(s model.Symbol) bool {
 // name. A qualified ref (Cfg.load()), which the footprint package gives the
 // container "default", reaches what any top-level class or namespace of the
 // module holds (an anonymous default class is named "default" itself), but
-// not the module's own functions. An unqualified one, a `new Cfg()`, names
-// the export itself, so it reaches top-level symbols only (constructed lets
-// it build any top-level class). The footprint package marks it
-// DefaultExport and leaves its container empty, so by name it reaches what
-// any unqualified ref does; a footprint of version 4 gave it the container
-// "default" instead.
+// not the module's own functions. An unqualified one, a `new Cfg()` (also
+// of `const Cfg = require(...)`), names the export itself, so it reaches
+// top-level symbols only (constructed lets it build any top-level class).
+// The footprint package marks it DefaultExport and leaves its container
+// empty, so by name it reaches what any unqualified ref does; a footprint
+// of version 4 gave it the container "default" instead.
 func defaultExport(ref model.Ref, sym model.Symbol) bool {
 	if model.LangFamily(ref.Lang) != "js" {
 		return false

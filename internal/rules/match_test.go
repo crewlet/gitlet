@@ -42,7 +42,7 @@ func TestMatch(t *testing.T) {
 		r.Qualifier, r.Container = qualifier, container
 		return r
 	}
-	newDefault := func(r model.Ref) model.Ref { // new X() of a default import
+	newDefault := func(r model.Ref) model.Ref { // new X() of a default import or a require binding
 		r.Kind, r.DefaultExport = model.RefConstruct, true
 		return r
 	}
@@ -144,6 +144,8 @@ func TestMatch(t *testing.T) {
 		{"ts new of a default import does not reach a member of its name", newDefault(ref("load", "typescript", "src/app.ts", 1, "src/config")), tsMethod, true, false, false},
 		{"ts new of a default import does not reach a class in a namespace", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/config")), nsCtor, false, false, false},
 		{"ts new of a default import in another module", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/other")), tsCtor, false, false, false},
+		{"javascript new of a renamed require reaches the constructor", newDefault(ref("Cfg", "javascript", "src/app.js", 1, "src/config")),
+			fn("javascript", "src/config.js", "Config.constructor", "constructor(p)"), false, true, true},
 		{"ts new of a default import from a version 4 footprint", construct(typed(ref("Cfg", "typescript", "src/app.ts", 1, "src/config"), "", "default")), tsCtor, false, true, true},
 		{"ts new of a class through a default import", construct(typed(ref("Inner", "typescript", "src/app.ts", 1, "src/config"), "Cfg", "default")),
 			fn("typescript", "src/config.ts", "Config.Inner.constructor", "constructor()"), false, true, true},

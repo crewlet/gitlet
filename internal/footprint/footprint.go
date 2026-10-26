@@ -17,7 +17,7 @@ import (
 // caches keyed by commits do not serve results of an older version, and
 // footprints stored with an older one are computed again. Compute records
 // it in Footprint.Version.
-const Version = 5
+const Version = 6
 
 // Source reads files at revisions and lists changed files. *gitx.Repo
 // satisfies it; tests can use fakes.
