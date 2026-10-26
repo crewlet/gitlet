@@ -3,6 +3,7 @@ package footprint
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -16,8 +17,8 @@ import (
 //
 //   - a ref that names something outside the repository (an import of
 //     another Go module or the standard library, a bare or aliased
-//     JavaScript specifier, a Rust std crate, a well-known global) is
-//     dropped;
+//     JavaScript specifier, a Rust std crate or prelude type, a JavaScript
+//     global or Python builtin the file does not define) is dropped;
 //   - a ref whose qualifier is a variable, receiver, self, this or super, or
 //     any expression that is not an import or a type of this file, is kept
 //     with Resolved false and no module;
@@ -67,15 +68,20 @@ type resolver struct {
 	bindings map[string]symbols.Import // by local name; later imports win
 	py       map[string]string         // Python qualifier prefixes to modules (pyBindings)
 	types    map[string]bool           // top-level type-like symbols of the file
+	defined  map[string]bool           // every top-level symbol of the file
+	// rustInline holds the paths of the file's inline Rust modules
+	// (rustInlineModules).
+	rustInline map[string]bool
 }
 
 func newResolver(f *symbols.File, goModule string) *resolver {
-	r := &resolver{goModule: goModule, bindings: map[string]symbols.Import{}, types: map[string]bool{}}
+	r := &resolver{goModule: goModule, bindings: map[string]symbols.Import{}, types: map[string]bool{}, defined: map[string]bool{}}
 	if f == nil {
 		return r
 	}
 	r.imports = f.Imports
 	r.py = pyBindings(f.Imports)
+	r.rustInline = rustInlineModules(f.Symbols)
 	for _, im := range f.Imports {
 		switch im.Local {
 		case "", "_", ".":
@@ -87,11 +93,22 @@ func newResolver(f *symbols.File, goModule string) *resolver {
 		r.bindings[im.Local] = im
 	}
 	for _, s := range f.Symbols {
-		if s.Container == "" && s.TypeLike() {
+		if s.Container != "" {
+			continue
+		}
+		r.defined[s.Name] = true
+		if s.TypeLike() {
 			r.types[s.Name] = true
 		}
 	}
 	return r
+}
+
+// builtin reports whether an unqualified, unimported name is one of the
+// language's builtins (a global, in JavaScript) that the file does not
+// define itself.
+func (r *resolver) builtin(names map[string]bool, name string) bool {
+	return names[name] && !r.defined[name]
 }
 
 func resolvedTo(ref model.Ref, module string) (model.Ref, bool) {
@@ -128,35 +145,39 @@ func upperFirst(s string) bool {
 
 // Go
 
+// goRef resolves a Go ref. Only a qualifier that is exactly an import's name
+// (or a type of this file, for a method expression) names a package; "x.y"
+// and "a.b()" are values, so their refs are unresolved.
 func (r *resolver) goRef(ref model.Ref) (model.Ref, bool) {
 	own := path.Dir(ref.Path)
-	if ref.Qualifier == "" {
+	q := ref.Qualifier
+	if q == "" {
 		return resolvedTo(ref, own)
 	}
-	head, _, _ := strings.Cut(ref.Qualifier, ".")
-	if im, ok := r.goImport(head); ok {
+	if im, ok := r.goImport(q); ok {
 		mod, ok := goImportModule(im.Module, r.goModule)
 		if !ok {
 			return dropped()
 		}
 		return resolvedTo(ref, mod)
 	}
-	if r.types[head] {
+	if r.types[q] {
 		return resolvedTo(ref, own) // method expression on a type of this package
 	}
 	return unresolved(ref)
 }
 
-// goImport finds the import a qualifier names: by its local name, else, for
-// an import without an explicit alias, by the package name guessed from its
-// path ("gopkg.in/yaml.v3" binds yaml).
+// goImport finds the import a qualifier names by its local name. A blank
+// import (no local name) binds nothing. When the extractor's guess at the
+// bound name is not an identifier, as "go-yaml" for example.com/go-yaml,
+// the package name is guessed from the path instead ("yaml").
 func (r *resolver) goImport(name string) (symbols.Import, bool) {
 	if im, ok := r.bindings[name]; ok {
 		return im, true
 	}
 	for i := len(r.imports) - 1; i >= 0; i-- {
 		im := r.imports[i]
-		if im.Kind == symbols.ImportGlob || (im.Local != "" && im.Local != path.Base(im.Module)) {
+		if im.Kind == symbols.ImportGlob || im.Local == "" || isIdent(im.Local) {
 			continue
 		}
 		if goPackageName(im.Module) == name {
@@ -210,10 +231,21 @@ var jsGlobals = setOf("console", "Math", "JSON", "Object", "Array", "Promise", "
 	"Boolean", "Symbol", "BigInt", "Date", "RegExp", "Error", "Map", "Set", "WeakMap", "WeakSet",
 	"Reflect", "Proxy", "Intl", "globalThis", "window", "document", "process", "Buffer")
 
+// jsGlobalFuncs are global functions and constructors called without a
+// qualifier.
+var jsGlobalFuncs = setOf("parseInt", "parseFloat", "isNaN", "isFinite", "setTimeout", "setInterval",
+	"clearTimeout", "clearInterval", "queueMicrotask", "structuredClone", "encodeURIComponent",
+	"decodeURIComponent", "encodeURI", "decodeURI", "Error", "TypeError", "RangeError", "Promise",
+	"Map", "Set", "WeakMap", "WeakSet", "Date", "RegExp", "Array", "Object", "Number", "String",
+	"Boolean", "Symbol", "BigInt", "URL", "URLSearchParams")
+
 func (r *resolver) jsRef(ref model.Ref) (model.Ref, bool) {
 	if ref.Qualifier == "" {
 		im, ok := r.bindings[ref.Name]
 		if !ok {
+			if r.builtin(jsGlobalFuncs, ref.Name) {
+				return dropped()
+			}
 			return resolvedTo(ref, ownModule(ref))
 		}
 		mod, ok := jsSpecifier(ref.Path, im.Module)
@@ -273,11 +305,26 @@ func jsSpecifier(file, spec string) (string, bool) {
 var pyBuiltins = setOf("str", "bytes", "int", "float", "complex", "bool", "list", "dict", "set",
 	"frozenset", "tuple", "object", "type", "bytearray", "memoryview", "range")
 
+// pyBuiltinFuncs are builtin functions and exceptions called without a
+// qualifier.
+var pyBuiltinFuncs = setOf("super", "print", "len", "isinstance", "issubclass", "range", "enumerate",
+	"zip", "map", "filter", "sorted", "reversed", "min", "max", "sum", "any", "all", "abs", "round",
+	"open", "iter", "next", "getattr", "setattr", "hasattr", "delattr", "repr", "hash", "id", "vars",
+	"dir", "callable", "format", "divmod", "pow", "chr", "ord", "hex", "oct", "bin", "input",
+	"str", "bytes", "int", "float", "complex", "bool", "list", "dict", "set", "frozenset", "tuple",
+	"object", "type", "bytearray", "memoryview", "property", "staticmethod", "classmethod",
+	"Exception", "BaseException", "ValueError", "TypeError", "KeyError", "IndexError", "RuntimeError",
+	"NotImplementedError", "AttributeError", "OSError", "IOError", "StopIteration", "AssertionError",
+	"ImportError", "LookupError", "PermissionError", "FileNotFoundError", "TimeoutError")
+
 func (r *resolver) pyRef(ref model.Ref) (model.Ref, bool) {
 	pkg := path.Dir(ref.Path)
 	if ref.Qualifier == "" {
 		im, ok := r.bindings[ref.Name]
 		if !ok {
+			if r.builtin(pyBuiltinFuncs, ref.Name) {
+				return dropped()
+			}
 			return resolvedTo(ref, ownModule(ref))
 		}
 		mod, ok := pyModule(pkg, im.Module)
@@ -289,8 +336,9 @@ func (r *resolver) pyRef(ref model.Ref) (model.Ref, bool) {
 		}
 		return resolvedTo(ref, mod)
 	}
-	if !dottedIdent(ref.Qualifier) {
-		return unresolved(ref)
+	head, _, _ := strings.Cut(ref.Qualifier, ".")
+	if head == "self" || head == "cls" || !dottedIdent(ref.Qualifier) {
+		return unresolved(ref) // receivers, super(), calls and subscripts
 	}
 	if m, rest, ok := r.pyLookup(ref.Qualifier); ok {
 		base, ok := pyModule(pkg, m)
@@ -299,7 +347,6 @@ func (r *resolver) pyRef(ref model.Ref) (model.Ref, bool) {
 		}
 		return resolvedTo(ref, joinModule(base, rest))
 	}
-	head, _, _ := strings.Cut(ref.Qualifier, ".")
 	switch {
 	case r.types[head]:
 		return resolvedTo(ref, ownModule(ref))
@@ -418,14 +465,16 @@ func (r *resolver) rustRef(ref model.Ref) (model.Ref, bool) {
 		}
 		return r.rustPath(ref, strings.Split(im.Module, "::"))
 	}
+	// Receivers ("self", "self.store", "a.b()", "x?", "_") and a Self the
+	// extractor could not replace with the impl's type are values.
 	q := ref.Qualifier
-	if !rustPathRe.MatchString(q) || q == "self" {
-		return unresolved(ref) // self.method(), field chains, expressions
+	segs := strings.Split(strings.TrimPrefix(q, "::"), "::")
+	if !rustPathRe.MatchString(q) || q == "self" || q == "Self" || slices.Contains(segs, "_") {
+		return unresolved(ref)
 	}
 	if strings.HasPrefix(q, "::") {
 		return dropped() // ::name is always an extern crate
 	}
-	segs := strings.Split(q, "::")
 	head := segs[0]
 	if im, ok := r.bindings[head]; ok {
 		full := strings.Split(im.Module, "::")
@@ -434,26 +483,33 @@ func (r *resolver) rustRef(ref model.Ref) (model.Ref, bool) {
 		}
 		return r.rustPath(ref, append(full, segs[1:]...))
 	}
-	if head == "Self" || r.types[head] {
+	switch {
+	case r.types[head]:
 		return resolvedTo(ref, ownModule(ref))
-	}
-	if upperFirst(head) {
-		if rustPrelude[head] {
-			return dropped()
-		}
+	case upperFirst(head) && rustPrelude[head]:
+		return dropped()
+	case upperFirst(head):
 		return unresolved(ref) // a type from a glob import or another crate
+	case len(segs) == 1 && ref.Kind == model.RefCall && !rustPathKeyword[head] && !r.rustInline[head]:
+		// x.f() and x::f() both arrive as qualifier "x"; a method call on a
+		// value is far more common than a call into an unimported module.
+		return unresolved(ref)
 	}
 	return r.rustPath(ref, segs)
 }
+
+var rustPathKeyword = setOf("crate", "self", "super")
 
 // rustPath resolves a Rust path to the module it names: crate is the
 // nearest src directory, self and super are relative to the file's module,
 // and a path that starts with any other lowercase name is a child module of
 // the file's module (or an extern crate, which then matches nothing). The
-// module ends at the first capitalized segment, which names a type.
+// module ends at the first capitalized segment, which names a type. A path
+// into an inline module of the file names the file itself, whose module its
+// items belong to.
 func (r *resolver) rustPath(ref model.Ref, segs []string) (model.Ref, bool) {
-	base := ownModule(ref)
-	rest := segs
+	own := ownModule(ref)
+	base, rest := own, segs
 	switch {
 	case len(segs) == 0 || segs[0] == "":
 		return dropped()
@@ -478,7 +534,32 @@ func (r *resolver) rustPath(ref model.Ref, segs []string) (model.Ref, bool) {
 		}
 		parts = append(parts, s)
 	}
-	return resolvedTo(ref, path.Join(parts...))
+	mod := path.Join(parts...)
+	if inner, ok := strings.CutPrefix(mod, own+"/"); ok && r.rustInline[strings.ReplaceAll(inner, "/", ".")] {
+		mod = own
+	}
+	return resolvedTo(ref, mod)
+}
+
+// rustInlineModules returns the paths of a Rust file's inline modules
+// ("outer", "outer.inner"), read from its symbols' containers: the leading
+// lowercase segments, since impl types (capitalized) follow them.
+func rustInlineModules(syms []model.Symbol) map[string]bool {
+	out := map[string]bool{}
+	for _, s := range syms {
+		if model.LangFamily(s.Lang) != "rust" || s.Container == "" {
+			continue
+		}
+		var prefix []string
+		for seg := range strings.SplitSeq(s.Container, ".") {
+			if seg == "" || upperFirst(seg) {
+				break
+			}
+			prefix = append(prefix, seg)
+			out[strings.Join(prefix, ".")] = true
+		}
+	}
+	return out
 }
 
 // rustCrateRoot returns the nearest src directory above a file, or the

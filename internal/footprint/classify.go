@@ -2,6 +2,7 @@ package footprint
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/gitlet/internal/model"
@@ -23,11 +24,12 @@ func classify(old, new model.Symbol) bool {
 		model.LangFamily(old.Lang) != model.LangFamily(new.Lang) {
 		return true
 	}
-	if old.Exported && !new.Exported {
+	c := newComparison(new.Lang, new.Kind)
+	oldVis, newVis := c.visibility(old), c.visibility(new)
+	if (old.Exported && !new.Exported) || newVis < oldVis {
 		return true // visibility narrowed
 	}
 
-	c := newComparison(new.Lang, new.Kind)
 	resultsOK, resultsChanged := c.results(old.Results, new.Results)
 	paramsOK, paramsChanged := c.params(old.Params, new.Params)
 	membersOK, membersChanged := c.members(old.Members, new.Members)
@@ -39,11 +41,46 @@ func classify(old, new model.Symbol) bool {
 	}
 	// Nothing structured explains the new hash. Wider visibility may, but
 	// only when the signatures differ in nothing else.
-	if !old.Exported && new.Exported {
+	if widened := (!old.Exported && new.Exported) || newVis > oldVis; widened {
 		return stripVisibility(old.Signature) != stripVisibility(new.Signature)
 	}
 	return true
 }
+
+// visibility ranks the visibility a symbol's signature shows, from 0 (most
+// private), where the language writes it there: Rust's pub forms, and
+// TypeScript's export and private or protected members. Go and Python say it
+// with the name, so they always rank 0.
+func (c comparison) visibility(s model.Symbol) int {
+	sig := s.Signature
+	switch c.family {
+	case "rust":
+		switch {
+		case sig == "pub" || strings.HasPrefix(sig, "pub "):
+			return 4
+		case strings.HasPrefix(sig, "pub(crate)"):
+			return 3
+		case strings.HasPrefix(sig, "pub(super)"), strings.HasPrefix(sig, "pub(in "):
+			return 2
+		}
+	case "js":
+		switch {
+		case tsPrivate.MatchString(sig):
+			return 0
+		case tsProtected.MatchString(sig):
+			return 1
+		case s.Container != "" || tsExport.MatchString(sig):
+			return 2 // a public member, or an exported declaration
+		}
+	}
+	return 0
+}
+
+var (
+	tsPrivate   = regexp.MustCompile(`(^|\s)private\s`)
+	tsProtected = regexp.MustCompile(`(^|\s)protected\s`)
+	tsExport    = regexp.MustCompile(`^export\s`)
+)
 
 // comparison holds the language rules for one symbol.
 type comparison struct {
@@ -75,26 +112,30 @@ func (c comparison) results(old, new string) (ok, changed bool) {
 // params compares parameter lists: existing parameters keep their position,
 // type and markers (an annotation may be added), names count only in
 // Python, and new parameters may only be appended when optional or variadic.
+//
+// A Python parameter without a name is positional-only (or a property
+// setter's value): giving it a name is compatible, while renaming a
+// parameter or making it positional-only breaks keyword callers.
 func (c comparison) params(old, new []model.Param) (ok, changed bool) {
 	if len(new) < len(old) {
 		return false, false
 	}
 	for i, o := range old {
 		n := new[i]
-		if c.lang != "python" {
+		allowed := false
+		switch {
+		case c.lang != "python":
 			o.Name, n.Name = "", "" // only Python callers pass arguments by name
-		}
-		if o == n {
-			continue
+		case o.Name == "" && n.Name != "":
+			n.Name, allowed = "", true
 		}
 		if c.annotations && o.Type == "" && n.Type != "" {
-			o.Type = n.Type
-			if o == n {
-				changed = true
-				continue
-			}
+			o.Type, allowed = n.Type, true
 		}
-		return false, false
+		if o != n {
+			return false, false
+		}
+		changed = changed || allowed
 	}
 	for _, n := range new[len(old):] {
 		if !n.Optional && !n.Variadic {
@@ -107,7 +148,9 @@ func (c comparison) params(old, new []model.Param) (ok, changed bool) {
 
 // members compares the exported shape of type-like symbols by member name:
 // existing members must stay as they were (an annotation may be added), and
-// new members are allowed only where memberAddable says so.
+// new members are allowed only where memberAddable says so. Reordering is
+// allowed where members form a set (structs, classes, interfaces, traits),
+// and breaking where the order carries meaning (enum values, aliases).
 func (c comparison) members(old, new []model.Member) (ok, changed bool) {
 	oldBy, newBy := groupMembers(old), groupMembers(new)
 	for name, os := range oldBy {
@@ -141,7 +184,40 @@ func (c comparison) members(old, new []model.Member) (ok, changed bool) {
 		}
 		changed = true
 	}
+	if reordered(old, new) {
+		switch c.kind {
+		case "struct", "class", "interface", "trait":
+			changed = true
+		default:
+			return false, false
+		}
+	}
 	return true, changed
+}
+
+// reordered reports whether the members both lists share appear in a
+// different order.
+func reordered(old, new []model.Member) bool {
+	inNew := make(map[string]bool, len(new))
+	for _, m := range new {
+		inNew[m.Name] = true
+	}
+	inOld := make(map[string]bool, len(old))
+	for _, m := range old {
+		inOld[m.Name] = true
+	}
+	var a, b []string
+	for _, m := range old {
+		if inNew[m.Name] {
+			a = append(a, m.Name)
+		}
+	}
+	for _, m := range new {
+		if inOld[m.Name] {
+			b = append(b, m.Name)
+		}
+	}
+	return !slices.Equal(a, b)
 }
 
 // memberAddable reports whether adding m keeps old users working: any field

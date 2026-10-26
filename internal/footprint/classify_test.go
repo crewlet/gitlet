@@ -202,6 +202,47 @@ func TestClassify(t *testing.T) {
 		{"rust: enum variant added", typ("rust", "enum", "enum T{A}", field("A", "")),
 			typ("rust", "enum", "enum T{A,B}", field("A", ""), field("B", "")), true},
 
+		// Reordering.
+		{"go: interface methods reordered", typ("go", "interface", "type T interface{A();B()}", method("A", "()"), method("B", "()")),
+			typ("go", "interface", "type T interface{B();A()}", method("B", "()"), method("A", "()")), false},
+		{"go: struct fields reordered", typ("go", "struct", "type T struct{A int;B int}", field("A", "int"), field("B", "int")),
+			typ("go", "struct", "type T struct{B int;A int}", field("B", "int"), field("A", "int")), false},
+		{"go: interface reordered with a method added", typ("go", "interface", "type T interface{A();B()}", method("A", "()"), method("B", "()")),
+			typ("go", "interface", "type T interface{B();A();C()}", method("B", "()"), method("A", "()"), method("C", "()")), true},
+		{"rust: trait items reordered", typ("rust", "trait", "trait T{fn a();fn b()}", method("a", "fn a()"), method("b", "fn b()")),
+			typ("rust", "trait", "trait T{fn b();fn a()}", method("b", "fn b()"), method("a", "fn a()")), false},
+		{"rust: enum variants reordered", typ("rust", "enum", "enum T{A,B}", field("A", ""), field("B", "")),
+			typ("rust", "enum", "enum T{B,A}", field("B", ""), field("A", "")), true},
+		{"ts: enum members reordered", typ("typescript", "enum", "enum T{A,B}", field("A", ""), field("B", "")),
+			typ("typescript", "enum", "enum T{B,A}", field("B", ""), field("A", "")), true},
+
+		// Python parameter names.
+		{"py: positional-only parameter gets a name", pyFn("def f(a, /)", named("", "")), pyFn("def f(a)", named("a", "")), false},
+		{"py: parameter becomes positional-only", pyFn("def f(a)", named("a", "")), pyFn("def f(a, /)", named("", "")), true},
+		{"py: setter value annotated", pyFn("setter def T.x(value)", named("", "")), pyFn("setter def T.x(value: int)", named("", "int")), false},
+		{"py: overloads changed", pyFn("def f(a: int) | def f(a: str)"), pyFn("def f(a: int) | def f(a: bytes)"), true},
+
+		// Visibility ranks.
+		{"rust: pub(crate) widened to pub", withExported(rsFn("pub(crate) fn f()"), false), rsFn("pub fn f()"), false},
+		{"rust: private widened to pub(crate)", withExported(rsFn("fn f()"), false), withExported(rsFn("pub(crate) fn f()"), false), false},
+		{"rust: pub(super) widened to pub(crate)", withExported(rsFn("pub(super) fn f()"), false), withExported(rsFn("pub(crate) fn f()"), false), false},
+		{"rust: pub narrowed to pub(crate)", rsFn("pub fn f()"), withExported(rsFn("pub(crate) fn f()"), false), true},
+		{"rust: pub(crate) narrowed to private", withExported(rsFn("pub(crate) fn f()"), false), withExported(rsFn("fn f()"), false), true},
+		{"rust: pub(crate) narrowed while a parameter type changes", withExported(rsFn("pub(crate) fn f(u8)", p("u8")), false),
+			withExported(rsFn("fn f(u16)", p("u16")), false), true},
+		{"ts: private widened to protected",
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "private C.m()"},
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "protected C.m()"}, false},
+		{"ts: protected widened to public",
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "protected C.m()"},
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "C.m()", exported: true}, false},
+		{"ts: protected narrowed to private",
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "protected C.m()"},
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "private C.m()"}, true},
+		{"ts: private member with an optional parameter added",
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "private C.m()"},
+			shape{lang: "typescript", kind: "method", name: "m", container: "C", sig: "private C.m(?)", params: []model.Param{opt(p(""))}}, false},
+
 		// Identity.
 		{"name changed", goFn("func f()", nil, ""), shape{lang: "go", kind: "function", name: "g", sig: "func g()", exported: true}, true},
 		{"container changed",
