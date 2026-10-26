@@ -1621,6 +1621,73 @@ func TestFlowStartLeavesAFinishedBranchWithWorkInProgress(t *testing.T) {
 	}
 }
 
+// Commits made on a finished task's branch after it closed are not that
+// task's: start does not leave them behind on its way to main, even when
+// it adopts the provisional item they belong to, but says how to move them.
+func TestFlowStartKeepsCommitsMadeAfterAFinishedTask(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	main := runGit(t, f.a, "rev-parse", "origin/main")
+
+	_, old := flowStart(t, ctx, ea, "Rename the default configuration file")
+	flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+	ab, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+
+	// A provisional item opened elsewhere follows the worktree onto the
+	// abandoned branch, where its work is committed.
+	runGit(t, f.a, "switch", "-q", "-c", "scratch", "main")
+	writeFile(t, f.a, "README.md", "# demo\n\nB is coming.\n")
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	runGit(t, f.a, "switch", "-q", old)
+	tip := flowCommit(t, f.a, "B", "b.go", "package config\n\n// B is new work.\nfunc B() int { return 1 }\n")
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	var prov model.WorkItem
+	flowLocked(ea, func() { prov, _ = ea.activeItem() })
+	if !prov.Provisional || prov.Branch != old {
+		t.Fatalf("active item %+v, want a provisional one on %s", prov, old)
+	}
+
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Add function B"})
+	must(t, err)
+	flowWant(t, "start with commits on the abandoned branch", r.Result, api.Refused)
+	if !slices.ContainsFunc(r.Details, func(d string) bool { return strings.Contains(d, shortOID(tip)+` "B"`) }) {
+		t.Errorf("details do not name the commit: %v", r.Details)
+	}
+	if got := runGit(t, f.a, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("worktree at %s after the refusal, want %s", got, tip)
+	}
+	move := ""
+	for _, o := range r.Options {
+		if strings.Contains(o.Command, "git cherry-pick") {
+			move = o.Command
+		}
+	}
+	if move == "" || !flowHasCommand(r.Options, "git switch -c") || !flowHasTool(r.Options, "start", "intent", "Add function B") {
+		t.Fatalf("options %+v", r.Options)
+	}
+
+	// Moved as the option says, the commit goes with the adopted item.
+	if out, err := exec.Command("sh", "-c", "cd '"+f.a+"' && "+move).CombinedOutput(); err != nil {
+		t.Fatalf("%s: %v\n%s", move, err, out)
+	}
+	r, err = ea.Start(ctx, api.StartInput{Intent: "Add function B"})
+	must(t, err)
+	flowWant(t, "start after moving the commit", r.Result, api.OK)
+	if r.Data.NewBranch || r.Data.Branch == old || !r.Data.Adopted || r.Data.Item.ID != prov.ID {
+		t.Errorf("start after moving: branch %q (new %v, adopted %v)", r.Data.Branch, r.Data.NewBranch, r.Data.Adopted)
+	}
+	if got := runGit(t, f.a, "log", "--format=%s", main+"..HEAD"); got != "B" {
+		t.Errorf("%s holds %q on top of main, want only B", r.Data.Branch, got)
+	}
+}
+
 // A provisional item is one gitlet opened for the branch the agent was on:
 // abandoning it does not make that branch a finished task's.
 func TestFlowStartStaysAfterAbandoningAProvisionalItem(t *testing.T) {
