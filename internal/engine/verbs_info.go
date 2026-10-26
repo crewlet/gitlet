@@ -351,39 +351,42 @@ func (e *Engine) carryRefusal(ctx context.Context, left model.WorkItem, from, in
 // leftBehindRefusal refuses start when a closed item's branch has commits
 // made after the item closed: they are new work, not the item's, and a new
 // branch from main would leave them behind on the old one, while start
-// rewrites no commits. It offers to move them onto the new branch name,
-// from main, or to keep them on top of the item's commits on that name.
-// A submitted item's later commits are its review fixes and stay with it.
+// rewrites no commits. Commits main has, merged in to keep the branch up to
+// date, and merges are no such work. It offers to move the commits, named
+// one by one, onto the new branch name from main, or to keep them on top of
+// the item's commits on that name. A submitted item's later commits are its
+// review fixes and stay with it.
 func (e *Engine) leftBehindRefusal(ctx context.Context, left finishedBranch, cur, name, from, intent string) (*api.Result, error) {
 	if left.Head == "" {
 		return nil, nil
 	}
-	oids, err := e.bg.RevList(ctx, "HEAD", left.Head)
-	if err != nil || len(oids) == 0 {
-		if err != nil {
-			err = fmt.Errorf("engine: start: %w", err)
-		}
-		return nil, err
-	}
-	shown, err := e.bg.Log(ctx, left.Head+"..HEAD", time.Time{}, maxDetailNames)
+	// %h is git's unique abbreviation: the command stays short enough to
+	// show in full however many commits it names.
+	out, err := e.bg.Run(ctx, "log", "--no-show-signature", "--no-merges", "--topo-order", "--reverse", "--format=%H %h %s",
+		"HEAD", "^"+left.Head, "^"+from, "--")
 	if err != nil {
 		return nil, fmt.Errorf("engine: start: %w", err)
 	}
-	var names []string
-	for _, c := range shown {
-		names = append(names, fmt.Sprintf("%s %q", shortOID(c.OID), c.Subject))
+	var picks, names []string
+	for _, l := range strings.Split(out, "\n") {
+		oid, rest, _ := strings.Cut(l, " ")
+		abbrev, subject, _ := strings.Cut(rest, " ")
+		if abbrev == "" {
+			continue
+		}
+		picks = append(picks, abbrev)
+		names = append(names, fmt.Sprintf("%s %q", shortOID(oid), subject))
 	}
-	list := strings.Join(names, ", ")
-	if more := len(oids) - len(shown); more > 0 {
-		list += fmt.Sprintf(" +%d more", more)
+	if len(picks) == 0 {
+		return nil, nil
 	}
 	it := left.Item
 	r := refused(fmt.Sprintf("Cannot start a new branch from %s: it would leave behind %s made on %s since your %s task %q ended.",
-		e.mainUpstream(), pluralize(len(oids), "commit"), cur, it.Status, it.Intent),
+		e.mainUpstream(), pluralize(len(picks), "commit"), cur, it.Status, it.Intent),
 		[]string{fmt.Sprintf("branch %s belongs to your %s task%s, so a new task starts from %s, without %s",
-			cur, it.Status, prSuffix(it.PR), e.mainUpstream(), list)},
+			cur, it.Status, prSuffix(it.PR), e.mainUpstream(), joinCapped(names, maxDetailNames))},
 		cmdOption("move them onto a new branch from "+e.mainUpstream(),
-			"git switch -c "+shellQuote(name)+" "+shellQuote(from)+" && git cherry-pick "+shellQuote(left.Head+".."+cur)),
+			"git switch -c "+shellQuote(name)+" "+shellQuote(from)+" && git cherry-pick "+strings.Join(picks, " ")),
 		cmdOption("or keep them on top of that task's commits, on a new branch", "git switch -c "+shellQuote(name)),
 		toolOption("then start again", "start", "intent", intent))
 	return &r, nil

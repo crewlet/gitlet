@@ -1690,6 +1690,75 @@ func TestFlowStartKeepsCommitsMadeAfterAFinishedTask(t *testing.T) {
 	}
 }
 
+// Main's commits merged into a finished task's branch, and the merges, are
+// not work made there: a new branch from main leaves nothing of them
+// behind, and the refusal moves exactly the commits that are, oldest first.
+func TestFlowStartLeavesMainsCommitsAndMergesBehind(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+
+	_, old := flowStart(t, ctx, ea, "Rename the default configuration file")
+	flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+	ab, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+
+	// The agent keeps the branch up to date as git pull origin main does.
+	flowMoveMain(t, f, "readme: peer one", "README.md", "# demo\n\npeer one\n")
+	flowMoveMain(t, f, "readme: peer two", "README.md", "# demo\n\npeer two\n")
+	runGit(t, f.a, "fetch", "-q", "origin")
+	runGit(t, f.a, "merge", "-q", "--no-edit", "origin/main")
+	clk.Advance(time.Minute)
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Read the configuration from the environment"})
+	must(t, err)
+	flowWant(t, "start with only main merged in", r.Result, api.OK)
+	main := runGit(t, f.a, "rev-parse", "origin/main")
+	if head := runGit(t, f.a, "rev-parse", "HEAD"); !r.Data.NewBranch || r.Data.Branch == old || head != main {
+		t.Fatalf("start on %s: branch %q (new %v) at %s, want a new branch at main %s", old, r.Data.Branch, r.Data.NewBranch, head, main)
+	}
+	ab, err = ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon the second task", ab.Result, api.OK)
+
+	// Commits of its own on both sides of another merge of main.
+	runGit(t, f.a, "switch", "-q", old)
+	one := flowCommit(t, f.a, "B: one", "b.go", "package config\n\nfunc B() int { return 1 }\n")
+	flowMoveMain(t, f, "readme: peer three", "README.md", "# demo\n\npeer three\n")
+	runGit(t, f.a, "fetch", "-q", "origin")
+	runGit(t, f.a, "merge", "-q", "--no-edit", "origin/main")
+	two := flowCommit(t, f.a, "B: two", "b.go", "package config\n\nfunc B() int { return 2 }\n")
+	clk.Advance(time.Minute)
+	r, err = ea.Start(ctx, api.StartInput{Intent: "Add function B"})
+	must(t, err)
+	flowWant(t, "start with commits of its own", r.Result, api.Refused)
+	if !strings.Contains(r.Summary, "leave behind 2 commits") {
+		t.Errorf("summary %q, want the 2 commits made on %s", r.Summary, old)
+	}
+	move := ""
+	for _, o := range r.Options {
+		if strings.Contains(o.Command, "git cherry-pick") {
+			move = o.Command
+		}
+	}
+	short := func(oid string) string { return runGit(t, f.a, "rev-parse", "--short", oid) }
+	if want := " && git cherry-pick " + short(one) + " " + short(two); !strings.HasSuffix(move, want) {
+		t.Fatalf("move option %q, want it to end in %q", move, want)
+	}
+	if out, err := exec.Command("sh", "-c", "cd '"+f.a+"' && "+move).CombinedOutput(); err != nil {
+		t.Fatalf("%s: %v\n%s", move, err, out)
+	}
+	r, err = ea.Start(ctx, api.StartInput{Intent: "Add function B"})
+	must(t, err)
+	flowWant(t, "start after moving the commits", r.Result, api.OK)
+	main = runGit(t, f.a, "rev-parse", "origin/main")
+	if got := runGit(t, f.a, "log", "--format=%s", main+"..HEAD"); r.Data.Branch == old || got != "B: two\nB: one" {
+		t.Errorf("%s holds %q on top of main, want B: one and B: two", r.Data.Branch, got)
+	}
+}
+
 // A provisional item is one gitlet opened for the branch the agent was on:
 // abandoning it does not make that branch a finished task's.
 func TestFlowStartStaysAfterAbandoningAProvisionalItem(t *testing.T) {

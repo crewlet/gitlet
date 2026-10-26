@@ -475,11 +475,11 @@ A work item is one task on one branch in one worktree.
   already on.
   Uncommitted changes that main's version of their files would overwrite are
   refused, with `git stash` as the way out. So are commits made on a closed
-  item's branch after it closed: they are new work, not the item's, which a
-  new branch from main would leave behind, and `start` rewrites no commits.
-  The refusal offers to cherry-pick them onto the new branch from main, or
-  to keep them on top of the item's commits on a new branch. Its result
-  lists:
+  item's branch after it closed, merges and commits main has aside: they are
+  new work, not the item's, which a new branch from main would leave behind,
+  and `start` rewrites no commits. The refusal offers to cherry-pick them,
+  named one by one, onto the new branch from main, or to keep them on top of
+  the item's commits on a new branch. Its result lists:
   - active items with similar intent (section 10.2),
   - items and claims touching `paths`,
   - commits on main from the last 7 days with similar subjects ("already
