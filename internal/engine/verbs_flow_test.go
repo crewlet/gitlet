@@ -199,6 +199,39 @@ exit 1
 	return log
 }
 
+// flowClosableGh is flowFakeGh without the log, whose pr view --jq .state
+// prints the contents of the returned file: OPEN until the test writes
+// something else there.
+func flowClosableGh(t *testing.T) (state string) {
+	t.Helper()
+	dir := t.TempDir()
+	created, state := filepath.Join(dir, "created"), filepath.Join(dir, "state")
+	writeFile(t, dir, "state", "OPEN\n")
+	flowPath(t, `#!/bin/sh
+case "$1 $2" in
+"pr view")
+	for a in "$@"; do
+		if [ "$a" = "--jq" ]; then
+			while read -r s; do printf '%s\n' "$s"; done < '`+state+`'
+			exit 0
+		fi
+	done
+	if [ -f '`+created+`' ]; then
+		printf '{"url":"%s","state":"OPEN"}\n' '`+flowPRURL+`'
+		exit 0
+	fi
+	echo 'no pull requests found for branch' >&2
+	exit 1 ;;
+"pr create")
+	: > '`+created+`'
+	printf '%s\n' '`+flowPRURL+`'
+	exit 0 ;;
+esac
+exit 1
+`)
+	return state
+}
+
 // flowForgeRemote makes dir's origin git@github.com:acme/widget.git, which
 // a stand-in ssh serves from the fixture's bare remote.
 func flowForgeRemote(t *testing.T, f *fixture, dir string) {
@@ -1029,31 +1062,7 @@ func TestFlowSubmitChecksContracts(t *testing.T) {
 // says so and offers to abandon it.
 func TestFlowClosedPullRequestOffersAbandon(t *testing.T) {
 	requireDeps(t)
-	dir := t.TempDir()
-	created, state := filepath.Join(dir, "created"), filepath.Join(dir, "state")
-	writeFile(t, dir, "state", "OPEN\n")
-	flowPath(t, `#!/bin/sh
-case "$1 $2" in
-"pr view")
-	for a in "$@"; do
-		if [ "$a" = "--jq" ]; then
-			while read -r s; do printf '%s\n' "$s"; done < '`+state+`'
-			exit 0
-		fi
-	done
-	if [ -f '`+created+`' ]; then
-		printf '{"url":"%s","state":"OPEN"}\n' '`+flowPRURL+`'
-		exit 0
-	fi
-	echo 'no pull requests found for branch' >&2
-	exit 1 ;;
-"pr create")
-	: > '`+created+`'
-	printf '%s\n' '`+flowPRURL+`'
-	exit 0 ;;
-esac
-exit 1
-`)
+	state := flowClosableGh(t)
 	f := newFixture(t)
 	ctx := ctxT(t)
 	clk := newClock()
@@ -1072,7 +1081,7 @@ exit 1
 		t.Fatalf("open pull request: items %+v options %+v", st.Data.Items, st.Options)
 	}
 
-	writeFile(t, dir, "state", "CLOSED\n")
+	must(t, os.WriteFile(state, []byte("CLOSED\n"), 0o644))
 	clk.Advance(ghEvery + time.Minute)
 	must(t, ea.Tick(ctx))
 	st, err = ea.Status(ctx, api.StatusInput{})
@@ -1089,6 +1098,76 @@ exit 1
 	ab, err := ea.Abandon(ctx, api.AbandonInput{Item: string(item), Reason: "the pull request was closed"})
 	must(t, err)
 	flowWant(t, "abandon", ab.Result, api.OK)
+}
+
+// gh's answer about a closed pull request outlives the process that asked:
+// a CLI call asks only after building its reply, and then exits, and a CLI
+// call made while a session runs does not ask at all.
+func TestFlowClosedPullRequestInEveryProcess(t *testing.T) {
+	requireDeps(t)
+	state := flowClosableGh(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	cli := func() *Engine {
+		t.Helper()
+		e, err := Open(ctx, Options{Dir: f.a, Client: "cli", Upkeep: true, Now: clk.Now})
+		must(t, err)
+		return e
+	}
+	status := func(e *Engine) (bool, *api.Reply[api.StatusData]) {
+		t.Helper()
+		r, err := e.Status(ctx, api.StatusInput{})
+		must(t, err)
+		must(t, e.Close())
+		return len(r.Data.Items) == 1 && r.Data.Items[0].PRClosed, r
+	}
+	e := cli()
+	item, _ := flowStart(t, ctx, e, "Use gitlet.json by default")
+	flowCommit(t, f.a, "default: use gitlet.json", "default.go", strings.Replace(mainGo, "gitlet.toml", "gitlet.json", 1))
+	r, err := e.Submit(ctx, api.SubmitInput{})
+	must(t, err)
+	flowWant(t, "submit", r.Result, api.OK)
+	must(t, e.Close())
+
+	// The first call after the pull request closed learns it; every later
+	// one shows it.
+	must(t, os.WriteFile(state, []byte("CLOSED\n"), 0o644))
+	clk.Advance(ghEvery + time.Minute)
+	status(cli())
+	for run := range 2 {
+		clk.Advance(time.Minute)
+		closed, st := status(cli())
+		if !closed || !slices.ContainsFunc(st.Details, func(d string) bool { return strings.Contains(d, "closed without merging") }) ||
+			!flowHasTool(st.Options, "abandon", "item", string(item)) {
+			t.Fatalf("CLI status %d after the close: closed %v, details %q, options %+v", run, closed, st.Details, st.Options)
+		}
+	}
+
+	// Reopened, it is no longer closed once gh says so.
+	must(t, os.WriteFile(state, []byte("OPEN\n"), 0o644))
+	clk.Advance(ghEvery + time.Minute)
+	status(cli())
+	if closed, _ := status(cli()); closed {
+		t.Fatal("CLI status after the pull request was reopened still says closed")
+	}
+
+	// What a session's tick learns, the CLI shows.
+	must(t, os.WriteFile(state, []byte("CLOSED\n"), 0o644))
+	clk.Advance(ghEvery + time.Minute)
+	es := openEngine(t, Options{Dir: f.a, Session: true, Now: clk.Now})
+	must(t, es.Tick(ctx))
+	if closed, st := status(cli()); !closed {
+		t.Fatalf("CLI status beside a session that saw the close: items %+v", st.Data.Items)
+	}
+	ab, err := es.Abandon(ctx, api.AbandonInput{Item: string(item), Reason: "the pull request was closed"})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+	flowLocked(es, func() {
+		if _, ok, err := es.led.Get(ctx, es.prClosedKey(item)); err != nil || ok {
+			t.Errorf("the abandoned task's closed pull request is still remembered (%v)", err)
+		}
+	})
 }
 
 func TestFlowSubmitPushesAndOpensPullRequest(t *testing.T) {

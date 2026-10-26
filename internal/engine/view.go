@@ -38,7 +38,6 @@ func (e *Engine) resetCaches() {
 	e.prevConflicts = map[string]rules.Conflict{}
 	e.landChecks = map[string]bool{}
 	e.ghChecked = map[model.ItemID]time.Time{}
-	e.prClosed = map[model.ItemID]bool{}
 }
 
 // trimCaches clears memo maps that grew too large over a long session.

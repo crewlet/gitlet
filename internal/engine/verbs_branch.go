@@ -611,6 +611,9 @@ func (e *Engine) doSubmit(ctx context.Context, in api.SubmitInput) (*api.Reply[a
 	if err != nil {
 		return nil, err
 	}
+	if s.data.PR != "" {
+		e.rememberPRClosed(ctx, s.item.ID, "") // gh found it open, or opened it
+	}
 	e.appendEvent(ctx, "submit", map[string]any{"item": s.item.ID, "branch": s.item.Branch, "head": s.head, "pr": s.data.PR})
 
 	intent, branch := s.item.Intent, s.item.Branch

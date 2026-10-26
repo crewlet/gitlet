@@ -86,7 +86,7 @@ func (e *Engine) itemLanded(ctx context.Context, it model.WorkItem, main string)
 // ghMerged asks gh whether the item's pull request was merged, at most
 // every ghEvery per item and within ghTimeout. A missing, unauthenticated
 // or slow gh means "not known". A pull request closed without merging is
-// remembered for status, which offers to abandon the task.
+// remembered for status, which offers to abandon the task (prClosed).
 func (e *Engine) ghMerged(ctx context.Context, it model.WorkItem) bool {
 	if it.PR == "" || e.bus.Remote() == "" {
 		return false
@@ -110,12 +110,47 @@ func (e *Engine) ghMerged(ctx context.Context, it model.WorkItem) bool {
 		return false
 	}
 	state := strings.TrimSpace(string(out))
-	if state == "CLOSED" {
-		e.prClosed[it.ID] = true
-	} else {
-		delete(e.prClosed, it.ID)
+	switch {
+	case state == "CLOSED":
+		e.rememberPRClosed(ctx, it.ID, it.PR)
+	case e.prClosed(ctx, it):
+		e.rememberPRClosed(ctx, it.ID, "") // reopened
 	}
 	return state == "MERGED"
+}
+
+func (e *Engine) prClosedKey(item model.ItemID) string {
+	return "pr-closed/" + string(e.me.ID) + "/" + string(item)
+}
+
+// rememberPRClosed records that gh reported pr, the item's pull request,
+// closed without merging, or with pr "" forgets it. The ledger keeps it, so
+// status shows it in every process of the worktree: a CLI call asks gh
+// only in its upkeep, after its reply, and a CLI call beside a live session
+// leaves gh to the session's ticks. Best effort.
+func (e *Engine) rememberPRClosed(ctx context.Context, item model.ItemID, pr string) {
+	if e.led.ReadOnly() {
+		return
+	}
+	var err error
+	if pr != "" {
+		err = e.led.Set(ctx, e.prClosedKey(item), pr)
+	} else {
+		err = e.led.Delete(ctx, e.prClosedKey(item))
+	}
+	if err != nil {
+		e.log.Debug("remember closed pull request", "item", item, "err", err)
+	}
+}
+
+// prClosed reports whether gh last reported the pull request of a submitted
+// item closed without merging.
+func (e *Engine) prClosed(ctx context.Context, it model.WorkItem) bool {
+	if it.Status != model.ItemSubmitted || it.PR == "" {
+		return false
+	}
+	pr, ok, err := e.led.Get(ctx, e.prClosedKey(it.ID))
+	return err == nil && ok && pr == it.PR
 }
 
 // land marks a submitted item landed and drops what it leaves behind
@@ -144,13 +179,15 @@ func (e *Engine) land(ctx context.Context, it model.WorkItem) error {
 
 // releaseItem drops what an item that landed or was abandoned leaves
 // behind (docs/SPEC.md, section 7): the claims I hold for it, each deleted
-// with a lease on the oid seen; its needs in my outbox; and its wip ref.
+// with a lease on the oid seen; its needs in my outbox; its wip ref; and
+// what gh said about its pull request.
 // It returns what it released ("claim <symbol>", "need <symbol>"). Claim
 // and wip deletions that fail are logged and left to later ticks (the
 // rules' Releases retry claims); an outbox write that fails is an error.
 // abandon uses it too.
 func (e *Engine) releaseItem(ctx context.Context, item model.ItemID) ([]string, error) {
 	e.rememberFinished(ctx, item)
+	e.rememberPRClosed(ctx, item, "")
 	var released []string
 	for _, cv := range e.myClaims() {
 		if cv.Claim.Item != item {

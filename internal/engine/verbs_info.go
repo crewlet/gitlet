@@ -563,7 +563,7 @@ func (e *Engine) statusData(ctx context.Context, v rules.View) api.StatusData {
 			Item:        it,
 			Overlaps:    overlaps(it, v),
 			Uncommitted: it.Status == model.ItemActive && dirty,
-			PRClosed:    it.Status == model.ItemSubmitted && e.prClosed[it.ID],
+			PRClosed:    e.prClosed(ctx, it),
 		})
 	}
 	data.Claims = e.relevantClaims(ctx, v)

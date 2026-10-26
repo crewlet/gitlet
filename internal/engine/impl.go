@@ -85,7 +85,6 @@ type impl struct {
 	prevConflicts map[string]rules.Conflict // by mine/other item pair
 	landChecks    map[string]bool           // landing memo, by item+head+main
 	ghChecked     map[model.ItemID]time.Time
-	prClosed      map[model.ItemID]bool // pull requests gh reported closed without merging
 	outsideRefs   []gitx.RefInfo
 	outside       []rules.Outside
 	lastReap      time.Time

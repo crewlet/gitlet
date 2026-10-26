@@ -500,7 +500,10 @@ A work item is one task on one branch in one worktree.
   item can be abandoned too, for example when its PR was closed unmerged
   (it would otherwise never land and keep its claims); its PR is left as it
   is. When `gh` reports a submitted item's PR closed without merging,
-  `status` says so and offers `abandon` for it.
+  `status` says so and offers `abandon` for it. The ledger keeps that answer
+  until `gh` reports the PR open again or the item lands or is abandoned, so
+  every process of the worktree shows it: the CLI asks `gh` after its reply,
+  and not at all while a session ticks.
 
 ## 8. Leases, liveness and visibility
 
