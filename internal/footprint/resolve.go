@@ -491,8 +491,9 @@ func (r *resolver) rustRef(ref model.Ref) (model.Ref, bool) {
 	case upperFirst(head):
 		return unresolved(ref) // a type from a glob import or another crate
 	case len(segs) == 1 && ref.Kind == model.RefCall && !rustPathKeyword[head] && !r.rustInline[head]:
-		// x.f() and x::f() both arrive as qualifier "x"; a method call on a
-		// value is far more common than a call into an unimported module.
+		// x.f() and x::f() both arrive as qualifier "x". A child module is
+		// bound by its `mod x;` declaration above, so what is left is a
+		// method call on a value, or a call into another crate.
 		return unresolved(ref)
 	}
 	return r.rustPath(ref, segs)

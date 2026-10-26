@@ -82,6 +82,27 @@ mod inner {
 }
 `
 
+// TestIntegrationRustModules checks calls into a sibling module declared
+// with `mod x;`, which needs no use declaration.
+func TestIntegrationRustModules(t *testing.T) {
+	res := computeReal(t, "",
+		change{status: "M", path: "src/main.rs",
+			base: "mod config;\n\nfn main() {}\n",
+			head: "mod config;\nmod net;\n\nfn main() {\n    config::load(\"x\");\n    let config = 1;\n    config.max(2);\n}\n"},
+		change{status: "M", path: "src/net/client.rs",
+			base: "mod retry;\n\npub fn send() {}\n",
+			head: "mod retry;\n\npub fn send() {\n    retry::with_backoff();\n    serde_json::to_string();\n}\n"},
+	)
+	checkLines(t, "refs", summarizeRefs(res.Footprint.Refs), []string{
+		"src/main.rs:5 config.load src/config",
+		// A variable named like the module reads as the module; Go, Python
+		// and JavaScript resolve qualifiers named like an import the same way.
+		"src/main.rs:7 config.max src/config",
+		"src/net/client.rs:4 retry.with_backoff src/net/client/retry",
+		"src/net/client.rs:5 serde_json.to_string ?", // another crate
+	})
+}
+
 func TestIntegrationRust(t *testing.T) {
 	res := computeReal(t, "",
 		change{status: "M", path: "src/net/client.rs", base: rsBase, head: rsHead},

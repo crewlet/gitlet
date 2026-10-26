@@ -633,6 +633,12 @@ func rsRefs(b *builder, n *sitter.Node, s rsScope) {
 		if rsTestModule(b, n) {
 			return
 		}
+		// `mod config;` binds config to a child module in another file, as
+		// `use self::config;` would, so config::load() can be resolved.
+		// Inline modules are found from their items' containers.
+		if name := b.Text(Field(n, "name")); Field(n, "body") == nil && name != "" {
+			b.Import(Import{Kind: ImportNamespace, Module: "self::" + name, Local: name}, n)
+		}
 	case "macro_invocation":
 		rsMacroRefs(b, ChildOfKind(n, "token_tree"), s)
 		return

@@ -358,7 +358,8 @@ macro_rules! square { ($x:expr) => { $x * $x }; }
 
 extern "C" { fn abs(x: i32) -> i32; static errno: i32; }
 
-mod declared;
+#[cfg(test)]
+mod declared_tests;
 
 fn outer() {
     fn nested() {}
@@ -711,7 +712,12 @@ func TestRustImports(t *testing.T) {
 			{Kind: ImportNamespace, Module: "a", Local: "a", Line: 1},
 			named("b", "c", "c"),
 		}},
-		{"extern crate serde;\nmod config;", nil},
+		// A module declaration binds a child module, so config::load()
+		// resolves like use self::config.
+		{"extern crate serde;\nmod config;", []Import{{Kind: ImportNamespace, Module: "self::config", Local: "config", Line: 2}}},
+		{"pub(crate) mod net;", []Import{{Kind: ImportNamespace, Module: "self::net", Local: "net", Line: 1}}},
+		{"#[cfg(test)]\nmod tests;", nil},
+		{"mod inline { pub fn f() {} }", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.src, func(t *testing.T) {

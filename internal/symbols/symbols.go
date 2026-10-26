@@ -21,7 +21,7 @@ type ImportKind string
 const (
 	ImportNamed     ImportKind = "named"     // import { a as b } from "m"; from m import a as b; use m::a as b
 	ImportDefault   ImportKind = "default"   // import b from "m"
-	ImportNamespace ImportKind = "namespace" // import * as b from "m"; import m as b; Go import; use m (module)
+	ImportNamespace ImportKind = "namespace" // import * as b from "m"; import m as b; Go import; use m (module); mod m;
 	ImportGlob      ImportKind = "glob"      // from m import *; use m::*; Go dot import
 )
 

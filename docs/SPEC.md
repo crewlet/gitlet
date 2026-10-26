@@ -691,7 +691,7 @@ A ref resolves to a module as follows:
 | Go | the file's own package | `q` is an import: the import path with the module path from the root `go.mod` removed |
 | TS/JS | a named or default import: the specifier resolved against the file (relative specifiers only); otherwise the file itself | `q` is a namespace import: its specifier |
 | Python | a `from m import name`: module `m` (relative, or absolute from the repo root); otherwise the file itself | `q` is an imported module or alias |
-| Rust | a `use path::name`: that path, with `crate` meaning the nearest `src` directory; otherwise the file itself | `q::name`: `q` expanded through `use` and resolved the same way |
+| Rust | a `use path::name`: that path, with `crate` meaning the nearest `src` directory; otherwise the file itself | `q::name`: `q` expanded through `use`, or a child module declared with `mod q;`, and resolved the same way |
 
 A ref whose qualifier is a variable, receiver, `self` or `this` is
 **unresolved**. It matches a method by name only when that method name is
