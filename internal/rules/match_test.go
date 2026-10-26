@@ -42,6 +42,12 @@ func TestMatch(t *testing.T) {
 		r.Qualifier, r.Container = qualifier, container
 		return r
 	}
+	newDefault := func(r model.Ref) model.Ref { // new X() of a default import
+		r.Kind, r.Container = model.RefConstruct, "default"
+		return r
+	}
+	tsClass := fn("typescript", "src/config.ts", "Config", "class Config")
+	tsClass.Kind = "class"
 
 	tests := []struct {
 		name           string
@@ -129,6 +135,19 @@ func TestMatch(t *testing.T) {
 		{"ts call of the class does not reach the constructor", ref("Config", "typescript", "src/app.ts", 1, "src/config"), tsCtor, false, false, false},
 		{"ts unresolved new does not reach the constructor", model.Ref{Name: "Config", Qualifier: "this.types", Kind: model.RefConstruct, Lang: "typescript", Path: "src/app.ts"}, tsCtor, true, false, false},
 		{"ts new of a class in a namespace", construct(ref("Config", "typescript", "src/config.ts", 1, "src/config")), nsCtor, false, true, true},
+		{"ts new of a renamed default import reaches the constructor", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/config")), tsCtor, false, true, true},
+		{"ts new of a default import reaches an anonymous class's constructor", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/config")),
+			fn("typescript", "src/config.ts", "default.constructor", "constructor(string)"), false, true, true},
+		{"ts new of a default import named like the class", newDefault(ref("Config", "typescript", "src/app.ts", 1, "src/config")), tsCtor, false, true, true},
+		{"ts new of a default import still reaches the class of its name", newDefault(ref("Config", "typescript", "src/app.ts", 1, "src/config")), tsClass, false, true, true},
+		{"ts new of a default import does not reach another class", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/config")), tsClass, false, false, false},
+		{"ts new of a default import does not reach a member of its name", newDefault(ref("load", "typescript", "src/app.ts", 1, "src/config")), tsMethod, true, false, false},
+		{"ts new of a default import does not reach a class in a namespace", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/config")), nsCtor, false, false, false},
+		{"ts new of a default import in another module", newDefault(ref("Cfg", "typescript", "src/app.ts", 1, "src/other")), tsCtor, false, false, false},
+		{"ts new of a class through a default import", newDefault(typed(ref("Inner", "typescript", "src/app.ts", 1, "src/config"), "Cfg", "default")),
+			fn("typescript", "src/config.ts", "Config.Inner.constructor", "constructor()"), false, true, true},
+		{"ts new of a class through a default import does not reach another class", newDefault(typed(ref("Inner", "typescript", "src/app.ts", 1, "src/config"), "Cfg", "default")),
+			fn("typescript", "src/config.ts", "Config.Other.constructor", "constructor()"), false, false, false},
 		{"python call of the class reaches __init__", ref("Config", "python", "pkg/app.py", 1, "pkg/config"), pyCtor, false, true, true},
 		{"python call through a module", typed(ref("Config", "python", "pkg/app.py", 1, "pkg/config"), "config", ""), pyCtor, false, true, true},
 		{"python call through a class does not reach __init__", typed(ref("Config", "python", "pkg/app.py", 1, "pkg/config"), "Base", "Base"), pyCtor, false, false, false},

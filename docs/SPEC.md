@@ -796,7 +796,10 @@ Building an instance names the class, while its parameters belong to the
 constructor, a method of its own. So a resolved `new X(...)` in TypeScript
 or JavaScript, and a resolved call `X(...)` in Python, also match the
 constructor of a class `X` (`constructor`, `__init__`), with the class's
-name, container and module standing in for the constructor's.
+name, container and module standing in for the constructor's. When `X` is
+a default import, it is the importer's name for the module's default
+export, so `new X(...)` matches the constructor of any top-level class of
+that module, and still a top-level symbol named `X`.
 
 ## 10. Rules
 

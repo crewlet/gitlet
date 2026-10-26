@@ -109,13 +109,20 @@ func typeMember(s model.Symbol) bool {
 
 // defaultExport reports whether a JavaScript ref through a module's default
 // export may reach sym. The footprint package gives such a ref the container
-// "default", as the importer cannot see the exported class's own name, so
-// the ref reaches what any top-level class or namespace of the module holds
-// (an anonymous default class is named "default" itself), but not the
-// module's own functions.
+// "default", as the importer cannot see the exported class's own name. A
+// qualified ref (Cfg.load()) reaches what any top-level class or namespace
+// of the module holds (an anonymous default class is named "default"
+// itself), but not the module's own functions. An unqualified one, a
+// `new Cfg()`, names the export itself, so it reaches top-level symbols
+// only (constructed lets it build any top-level class).
 func defaultExport(ref model.Ref, sym model.Symbol) bool {
-	return ref.Container == "default" && model.LangFamily(ref.Lang) == "js" &&
-		sym.Container != "" && !strings.Contains(sym.Container, ".")
+	if ref.Container != "default" || model.LangFamily(ref.Lang) != "js" {
+		return false
+	}
+	if ref.Qualifier == "" {
+		return sym.Container == ""
+	}
+	return sym.Container != "" && !strings.Contains(sym.Container, ".")
 }
 
 // lastSegment returns the last dot-separated segment of a container.
@@ -150,6 +157,11 @@ func constructed(ref model.Ref, sym model.Symbol) (model.Symbol, bool) {
 	class.Container, class.Name = "", sym.Container
 	if i := strings.LastIndexByte(sym.Container, '.'); i >= 0 {
 		class.Container, class.Name = sym.Container[:i], sym.Container[i+1:]
+	}
+	if class.Container == "" && defaultExport(ref, class) {
+		// A `new` of a default import names the class by the importer's
+		// name: it may build any top-level class of the module.
+		class.Name = ref.Name
 	}
 	return class, true
 }

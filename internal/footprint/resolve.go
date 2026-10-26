@@ -29,7 +29,8 @@ import (
 //     as Container (a class, "default" for a JavaScript default export, a Go
 //     method expression's type, a Rust type or inline module). When the ref
 //     uses an aliased named import, its name becomes the imported name, so
-//     it can match the definition.
+//     it can match the definition. A JavaScript `new` of a default import
+//     keeps the importer's name and gets the container "default".
 //
 // Python and Rust modules the file imports by absolute path are kept even
 // when they are probably third-party: nothing in one file tells them apart
@@ -289,7 +290,14 @@ func (r *resolver) jsRef(ref model.Ref) (model.Ref, bool) {
 		if !ok {
 			return dropped()
 		}
-		if im.Kind == symbols.ImportNamed && im.Name != "" && im.Name != "default" {
+		switch {
+		case im.Kind == symbols.ImportDefault || im.Name == "default":
+			// `new Cfg()` builds the module's default export, whose own
+			// name need not be Cfg (jsContainer).
+			if ref.Kind == model.RefConstruct {
+				ref = inType(ref, "default")
+			}
+		case im.Kind == symbols.ImportNamed && im.Name != "":
 			ref.Name = im.Name
 		}
 		return resolvedTo(ref, mod)
