@@ -21,6 +21,17 @@ func TestMatch(t *testing.T) {
 	pyMethod := fn("python", "pkg/models.py", "User.save", "def save(self)")
 	rsMethod := fn("rust", "src/parser.rs", "Parser.new", "pub fn new() -> Parser")
 	rsLib := fn("rust", "crates/core/src/lib.rs", "run", "pub fn run()")
+	goCacheNew := fn("go", "internal/store/cache.go", "Cache.New", "func (*Cache) New(string, int) int")
+	pyNested := fn("python", "pkg/models.py", "User.Meta", "class Meta")
+	pyNested.Kind = "class"
+	rsInline := fn("rust", "src/net.rs", "retry.run", "pub fn run()")
+	rsInline.Kind = "function" // in the inline module retry
+	rsAssoc := fn("rust", "src/parser.rs", "Parser.MAX", "pub const Parser::MAX: usize")
+	rsAssoc.Kind = "const"
+	typed := func(r model.Ref, qualifier, container string) model.Ref {
+		r.Qualifier, r.Container = qualifier, container
+		return r
+	}
 
 	tests := []struct {
 		name           string
@@ -38,8 +49,11 @@ func TestMatch(t *testing.T) {
 		{"no suffix match in ts", ref("parseConfig", "typescript", "src/app.ts", 3, "config"), tsFn, false, false, false},
 		{"ts index stands for its directory", ref("slug", "typescript", "src/a.ts", 1, "src/util"), tsIndex, false, true, true},
 		{"ts index by full path", ref("slug", "typescript", "src/a.ts", 1, "src/util/index"), tsIndex, false, true, true},
-		{"resolved ref reaches a method in its module", ref("load", "typescript", "src/a.ts", 1, "src/config"), tsMethod, false, true, true},
-		{"static call through the class", model.Ref{Name: "load", Qualifier: "Config", Kind: model.RefCall, Lang: "typescript", Path: "src/a.ts", Module: "src/config", Resolved: true}, tsMethod, false, true, true},
+		{"unqualified ref does not reach a method", ref("load", "typescript", "src/a.ts", 1, "src/config"), tsMethod, false, false, false},
+		{"static call through the class", typed(ref("load", "typescript", "src/a.ts", 1, "src/config"), "Config", "Config"), tsMethod, false, true, true},
+		{"static call through an aliased class", typed(ref("load", "typescript", "src/a.ts", 1, "src/config"), "C", "Config"), tsMethod, false, true, true},
+		{"static call through another class", typed(ref("load", "typescript", "src/a.ts", 1, "src/config"), "Store", "Store"), tsMethod, false, false, false},
+		{"class qualifier does not reach a function", typed(ref("parseConfig", "typescript", "src/a.ts", 1, "src/config"), "Config", "Config"), tsFn, false, false, false},
 		{"unresolved unique method", methodRef("load", "cfg", "typescript", "src/a.ts", 1), tsMethod, true, true, false},
 		{"unresolved method not unique", methodRef("load", "cfg", "typescript", "src/a.ts", 1), tsMethod, false, false, false},
 		{"unresolved never matches a function", methodRef("parseConfig", "x", "typescript", "src/a.ts", 1), tsFn, true, false, false},
@@ -54,16 +68,28 @@ func TestMatch(t *testing.T) {
 		{"go value receiver unresolved unique", methodRef("Get", "s.store", "go", "cmd/a.go", 1), goMethod, true, true, false},
 		{"go unexported method from another package", methodRef("get", "s", "go", "cmd/a.go", 1), goMethodUnexp, true, false, false},
 		{"go unexported method in its package", methodRef("get", "s", "go", "internal/store/x.go", 1), goMethodUnexp, true, true, false},
-		{"go resolved ref to the method's package", ref("Get", "go", "cmd/a.go", 1, "internal/store"), goMethod, false, true, true},
+		{"go package call does not reach a method", typed(ref("Get", "go", "cmd/a.go", 1, "internal/store"), "store", ""), goMethod, false, false, false},
+		{"go package call does not reach a method of the same name", typed(ref("New", "go", "cmd/a.go", 1, "internal/store"), "store", ""), goCacheNew, false, false, false},
+		{"go method expression", typed(ref("Get", "go", "internal/store/x.go", 1, "internal/store"), "Store", "Store"), goMethod, false, true, true},
 		{"go resolved ref to another package", ref("Get", "go", "cmd/a.go", 1, "internal/cache"), goMethod, true, false, false},
 		{"python absolute", ref("load", "python", "src/app/main.py", 1, "src/app/config"), pyFn, false, true, true},
 		{"python source root suffix", ref("load", "python", "src/app/main.py", 1, "app/config"), pyFn, false, true, true},
 		{"python __init__ stands for its package", ref("setup", "python", "x.py", 1, "pkg"), pyInit, false, true, true},
 		{"python method via self", methodRef("save", "self", "python", "pkg/views.py", 1), pyMethod, true, true, false},
-		{"python class imported by name", model.Ref{Name: "save", Qualifier: "User", Kind: model.RefCall, Lang: "python", Path: "pkg/views.py", Module: "pkg/models", Resolved: true}, pyMethod, false, true, true},
-		{"rust type path", model.Ref{Name: "new", Qualifier: "Parser", Kind: model.RefCall, Lang: "rust", Path: "src/main.rs", Module: "src/parser", Resolved: true}, rsMethod, false, true, true},
-		{"rust expanded type path", model.Ref{Name: "new", Qualifier: "crate::parser::Parser", Kind: model.RefCall, Lang: "rust", Path: "src/main.rs", Module: "src/parser", Resolved: true}, rsMethod, false, true, true},
-		{"rust other module", model.Ref{Name: "new", Qualifier: "Lexer", Kind: model.RefCall, Lang: "rust", Path: "src/main.rs", Module: "src/lexer", Resolved: true}, rsMethod, false, false, false},
+		{"python class imported by name", typed(ref("save", "python", "pkg/views.py", 1, "pkg/models"), "User", "User"), pyMethod, false, true, true},
+		{"python class qualifier does not reach a function", typed(ref("load", "python", "src/app/main.py", 1, "src/app/config"), "Config", "Config"), pyFn, false, false, false},
+		{"python unqualified ref does not reach a nested class", ref("Meta", "python", "pkg/models.py", 1, "pkg/models"), pyNested, false, false, false},
+		{"python nested class through its class", typed(ref("Meta", "python", "pkg/views.py", 1, "pkg/models"), "User", "User"), pyNested, false, true, true},
+		{"rust type path", typed(ref("new", "rust", "src/main.rs", 1, "src/parser"), "Parser", "Parser"), rsMethod, false, true, true},
+		{"rust expanded type path", typed(ref("new", "rust", "src/main.rs", 1, "src/parser"), "crate::parser::Parser", "Parser"), rsMethod, false, true, true},
+		{"rust other module", typed(ref("new", "rust", "src/main.rs", 1, "src/lexer"), "Lexer", "Lexer"), rsMethod, false, false, false},
+		{"rust module path does not reach a method", typed(ref("new", "rust", "src/main.rs", 1, "src/parser"), "parser", ""), rsMethod, false, false, false},
+		{"rust inline module path", typed(ref("run", "rust", "src/net.rs", 1, "src/net"), "retry", "retry"), rsInline, false, true, true},
+		{"rust unqualified ref inside an inline module", ref("run", "rust", "src/net.rs", 1, "src/net"), rsInline, false, true, true},
+		{"rust type in an inline module", typed(ref("new", "rust", "src/main.rs", 1, "src/parser"), "inner::Parser", "inner.Parser"),
+			fn("rust", "src/parser.rs", "inner.Parser.new", "pub fn new() -> Parser"), false, true, true},
+		{"rust unqualified ref does not reach an associated const", ref("MAX", "rust", "src/parser.rs", 1, "src/parser"), rsAssoc, false, false, false},
+		{"rust associated const through its type", typed(ref("MAX", "rust", "src/main.rs", 1, "src/parser"), "Parser", "Parser"), rsAssoc, false, true, true},
 		{"rust lib stands for its directory", ref("run", "rust", "crates/cli/src/main.rs", 1, "crates/core/src"), rsLib, false, true, true},
 		{"empty module", model.Ref{Name: "parseConfig", Lang: "typescript", Path: "a.ts", Resolved: true}, tsFn, false, false, false},
 	}

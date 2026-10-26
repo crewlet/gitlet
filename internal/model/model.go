@@ -185,6 +185,12 @@ type Ref struct {
 	Line      int     `json:"line"`
 	Module    string  `json:"module,omitempty"` // module the ref resolves to (docs/SPEC.md, section 9.5)
 	Resolved  bool    `json:"resolved"`
+
+	// Container is what a resolved ref's qualifier names inside Module, in
+	// the form of Symbol.Container: a type ("Config" for Config.load,
+	// Config::new or a Go method expression) or a Rust inline module. It is
+	// "" when the qualifier names the module itself, or there is none.
+	Container string `json:"container,omitempty"`
 }
 
 // Footprint is what a work item changes, at file and symbol level.

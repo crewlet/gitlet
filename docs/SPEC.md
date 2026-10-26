@@ -714,6 +714,16 @@ module that ends with `/` plus the ref's module also matches, which covers
 must also be exported, unless the ref is in the same package. Refs to
 TypeScript path aliases and bare package specifiers are treated as external.
 
+A resolved ref must also reach the symbol's container. A qualifier that
+names a type (`Config.load`, `Config::new`, the Go method expression
+`Store.Get`) or a Rust inline module reaches only what that type or module
+of the same name holds. Any other resolved ref, unqualified or through a
+module or package, reaches only symbols that are not members of a type:
+not methods, Python class members, or Rust `impl` and trait items. A
+JavaScript named or default import used as a qualifier names a class when
+it is capitalized, and otherwise an exported object, whose members are
+taken for the module's own functions.
+
 ## 10. Rules
 
 Rules run in each server over its own view and produce notes for its own

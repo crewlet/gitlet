@@ -18,7 +18,7 @@ type resolveCase struct {
 	inline   []string // containers of functions in inline Rust modules ("outer.inner")
 	kind     model.RefKind
 	goModule GoModule
-	want     string // "name module", "name ?" when unresolved, "" when dropped
+	want     string // "name module" ("Container.name module"), "name ?" when unresolved, "" when dropped
 }
 
 func ns(local, module string) symbols.Import {
@@ -77,10 +77,12 @@ func runResolveCases(t *testing.T, tests []resolveCase) {
 			if len(out) == 1 {
 				r := out[0]
 				switch {
+				case r.Resolved && r.Container != "":
+					got = r.Container + "." + r.Name + " " + r.Module
 				case r.Resolved:
 					got = r.Name + " " + r.Module
-				case r.Module != "":
-					got = "unresolved with module " + r.Module
+				case r.Module != "" || r.Container != "":
+					got = "unresolved with module " + r.Module + " in " + r.Container
 				default:
 					got = r.Name + " ?"
 				}
@@ -122,7 +124,7 @@ func TestResolveGo(t *testing.T) {
 		{name: "blank import binds nothing", path: file, ref: "drivers.Open", imports: []symbols.Import{ns("", "example.com/m/drivers")}, goModule: mod, want: "Open ?"},
 		{name: "dot import binds nothing", path: file, ref: "util.F", imports: []symbols.Import{{Module: "example.com/m/util", Kind: symbols.ImportGlob}}, goModule: mod, want: "F ?"},
 		{name: "receiver is unresolved", path: file, ref: "c.Load", imports: []symbols.Import{model_}, goModule: mod, want: "Load ?"},
-		{name: "method expression on a local type", path: file, ref: "Config.Load", types: []string{"Config"}, goModule: mod, want: "Load internal/engine"},
+		{name: "method expression on a local type", path: file, ref: "Config.Load", types: []string{"Config"}, goModule: mod, want: "Config.Load internal/engine"},
 	})
 }
 
@@ -161,14 +163,18 @@ func TestResolveTypeScript(t *testing.T) {
 		{name: "alias specifier dropped", path: file, ref: "x", imports: []symbols.Import{nm("x", "x", "@/lib/x")}},
 		{name: "specifier outside the repository dropped", path: file, ref: "x", imports: []symbols.Import{nm("x", "x", "../../../x")}},
 		{name: "namespace import", path: file, ref: "api.get", imports: []symbols.Import{ns("api", "./api")}, want: "get src/app/api"},
-		{name: "named import as a qualifier", path: file, ref: "Store.create", imports: []symbols.Import{nm("Store", "Store", "./store")}, want: "create src/app/store"},
+		{name: "named import as a qualifier", path: file, ref: "Store.create", imports: []symbols.Import{nm("Store", "Store", "./store")}, want: "Store.create src/app/store"},
+		{name: "aliased class as a qualifier", path: file, ref: "S.create", imports: []symbols.Import{nm("S", "Store", "./store")}, want: "Store.create src/app/store"},
+		{name: "default class as a qualifier", path: file, ref: "Store.create", imports: []symbols.Import{dflt("Store", "./store")}, want: "Store.create src/app/store"},
+		{name: "lowercase import as a qualifier is an object of its module", path: file, ref: "utils.slug", imports: []symbols.Import{dflt("utils", "./utils")}, want: "slug src/app/utils"},
+		{name: "class through a namespace import", path: file, ref: "api.Client.create", imports: []symbols.Import{ns("api", "./api")}, want: "Client.create src/app/api"},
 		{name: "bare namespace dropped", path: file, ref: "fs.readFile", imports: []symbols.Import{ns("fs", "node:fs")}},
 		{name: "this is unresolved", path: file, ref: "this.load", want: "load ?"},
 		{name: "member chain on this is unresolved", path: file, ref: "this.client.get", want: "get ?"},
 		{name: "super is unresolved", path: file, ref: "super.load", want: "load ?"},
 		{name: "variable is unresolved", path: file, ref: "client.get", want: "get ?"},
 		{name: "call expression is unresolved", path: file, ref: "make().get", want: "get ?"},
-		{name: "static member of a local class", path: file, ref: "Foo.create", types: []string{"Foo"}, want: "create src/app/main"},
+		{name: "static member of a local class", path: file, ref: "Foo.create", types: []string{"Foo"}, want: "Foo.create src/app/main"},
 		{name: "global dropped", path: file, ref: "console.log"},
 		{name: "global shadowed by an import", path: file, ref: "JSON.parse", imports: []symbols.Import{ns("JSON", "./json")}, want: "parse src/app/json"},
 	})
@@ -187,18 +193,20 @@ func TestResolvePython(t *testing.T) {
 		{name: "relative import from __init__", path: "pkg/__init__.py", ref: "x", imports: []symbols.Import{nm("x", "x", ".sub")}, want: "x pkg/sub"},
 		{name: "relative import above the root dropped", path: "top.py", ref: "x", imports: []symbols.Import{nm("x", "x", "..")}},
 		{name: "submodule imported from a package", path: file, ref: "helpers.run", imports: []symbols.Import{nm("helpers", "helpers", ".")}, want: "run pkg/sub/helpers"},
-		{name: "class imported from a module", path: file, ref: "User.create", imports: []symbols.Import{nm("User", "User", ".models")}, want: "create pkg/sub/models"},
+		{name: "class imported from a module", path: file, ref: "User.create", imports: []symbols.Import{nm("User", "User", ".models")}, want: "User.create pkg/sub/models"},
+		{name: "aliased class", path: file, ref: "U.create", imports: []symbols.Import{nm("U", "User", ".models")}, want: "User.create pkg/sub/models"},
+		{name: "nested class imported from a module", path: file, ref: "User.Meta.build", imports: []symbols.Import{nm("User", "User", ".models")}, want: "User.Meta.build pkg/sub/models"},
 		{name: "import a.b with the dotted local", path: file, ref: "a.b.f", imports: []symbols.Import{ns("a.b", "a.b")}, want: "f a/b"},
 		{name: "import a.b with the bound name", path: file, ref: "a.b.f", imports: []symbols.Import{ns("a", "a.b")}, want: "f a/b"},
 		{name: "import a.b reaching a sibling", path: file, ref: "a.c.f", imports: []symbols.Import{ns("a.b", "a.b")}, want: "f a/c"},
 		{name: "import as alias", path: file, ref: "cfg.load", imports: []symbols.Import{ns("cfg", "pkg.config")}, want: "load pkg/config"},
-		{name: "class through a module path", path: file, ref: "pkg.models.User.get", imports: []symbols.Import{ns("pkg.models", "pkg.models")}, want: "get pkg/models"},
+		{name: "class through a module path", path: file, ref: "pkg.models.User.get", imports: []symbols.Import{ns("pkg.models", "pkg.models")}, want: "User.get pkg/models"},
 		{name: "third-party module is kept", path: file, ref: "np.array", imports: []symbols.Import{ns("np", "numpy")}, want: "array numpy"},
 		{name: "standard library module is kept", path: file, ref: "os.path.join", imports: []symbols.Import{ns("os", "os")}, want: "join os/path"},
 		{name: "self is unresolved", path: file, ref: "self.load", want: "load ?"},
 		{name: "cls is unresolved", path: file, ref: "cls.load", want: "load ?"},
 		{name: "super() is unresolved", path: file, ref: "super().load", want: "load ?"},
-		{name: "classmethod of a local class", path: file, ref: "Config.load", types: []string{"Config"}, want: "load pkg/sub/mod"},
+		{name: "classmethod of a local class", path: file, ref: "Config.load", types: []string{"Config"}, want: "Config.load pkg/sub/mod"},
 		{name: "builtin type dropped", path: file, ref: "str.join"},
 		{name: "glob import binds nothing", path: file, ref: "load", imports: []symbols.Import{glob("pkg.config")}, want: "load pkg/sub/mod"},
 	})
@@ -219,15 +227,16 @@ func TestResolveRust(t *testing.T) {
 		{name: "module imported as a namespace", path: file, ref: "config::load", imports: []symbols.Import{ns("config", "crate::config")}, want: "load src/config"},
 		{name: "module imported by name", path: file, ref: "config::load", imports: []symbols.Import{nm("config", "config", "crate")}, want: "load src/config"},
 		{name: "module imported with self", path: file, ref: "config::load", imports: []symbols.Import{ns("config", "crate::config")}, want: "load src/config"},
-		{name: "type imported by name", path: file, ref: "Config::new", imports: []symbols.Import{nm("Config", "Config", "crate::config")}, want: "new src/config"},
+		{name: "type imported by name", path: file, ref: "Config::new", imports: []symbols.Import{nm("Config", "Config", "crate::config")}, want: "Config.new src/config"},
+		{name: "type imported under an alias", path: file, ref: "Cfg::new", imports: []symbols.Import{nm("Cfg", "Config", "crate::config")}, want: "Config.new src/config"},
 		{name: "crate path qualifier", path: file, ref: "crate::config::load", want: "load src/config"},
-		{name: "crate path through a type", path: file, ref: "crate::config::Config::new", want: "new src/config"},
+		{name: "crate path through a type", path: file, ref: "crate::config::Config::new", want: "Config.new src/config"},
 		{name: "super qualifier", path: file, ref: "super::parse", want: "parse src/net"},
 		{name: "super super qualifier", path: file, ref: "super::super::x::f", want: "f src/x"},
 		{name: "self path qualifier", path: file, ref: "self::inner::f", want: "f src/net/client/inner"},
 		{name: "Self left in a trait is unresolved", path: file, ref: "Self::new", want: "new ?"},
-		{name: "Self rewritten to an impl type elsewhere", path: file, ref: "super::Foo::new", want: "new src/net"},
-		{name: "local type", path: file, ref: "Client::new", types: []string{"Client"}, want: "new src/net/client"},
+		{name: "Self rewritten to an impl type elsewhere", path: file, ref: "super::Foo::new", want: "Foo.new src/net"},
+		{name: "local type", path: file, ref: "Client::new", types: []string{"Client"}, want: "Client.new src/net/client"},
 		{name: "child module type", path: file, ref: "helpers::Thing", kind: model.RefType, want: "Thing src/net/client/helpers"},
 		{name: "child module path", path: file, ref: "helpers::util::run", want: "run src/net/client/helpers/util"},
 		{name: "child module declared with mod", path: file, ref: "retry::run", imports: []symbols.Import{ns("retry", "self::retry")}, want: "run src/net/client/retry"},
@@ -236,10 +245,12 @@ func TestResolveRust(t *testing.T) {
 		{name: "method call on a value", path: file, ref: "c.send", want: "send ?"},
 		{name: "underscore receiver", path: file, ref: "_.send", want: "send ?"},
 		{name: "receiver with try", path: file, ref: "load()?.send", want: "send ?"},
-		{name: "inline module call", path: file, ref: "inner::f", inline: []string{"inner"}, want: "f src/net/client"},
-		{name: "inline module through self", path: file, ref: "self::inner::f", inline: []string{"inner"}, want: "f src/net/client"},
-		{name: "nested inline module", path: file, ref: "self::outer::inner::f", inline: []string{"outer.inner", "outer.Config"}, want: "f src/net/client"},
-		{name: "inline module through crate", path: file, ref: "crate::net::client::inner::f", inline: []string{"inner"}, want: "f src/net/client"},
+		{name: "inline module call", path: file, ref: "inner::f", inline: []string{"inner"}, want: "inner.f src/net/client"},
+		{name: "inline module through self", path: file, ref: "self::inner::f", inline: []string{"inner"}, want: "inner.f src/net/client"},
+		{name: "nested inline module", path: file, ref: "self::outer::inner::f", inline: []string{"outer.inner", "outer.Config"}, want: "outer.inner.f src/net/client"},
+		{name: "type in an inline module", path: file, ref: "self::outer::Config::new", inline: []string{"outer.inner", "outer.Config"}, want: "outer.Config.new src/net/client"},
+		{name: "inline module through crate", path: file, ref: "crate::net::client::inner::f", inline: []string{"inner"}, want: "inner.f src/net/client"},
+		{name: "use of an inline module item", path: file, ref: "f", imports: []symbols.Import{nm("f", "f", "self::inner")}, inline: []string{"inner"}, want: "inner.f src/net/client"},
 		{name: "impl type is not an inline module", path: file, ref: "self::config::f", inline: []string{"Config"}, want: "f src/net/client/config"},
 		{name: "crate root call", path: file, ref: "crate::init", want: "init src"},
 		{name: "std import dropped", path: file, ref: "HashMap::new", imports: []symbols.Import{nm("HashMap", "HashMap", "std::collections")}},

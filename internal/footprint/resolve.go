@@ -23,8 +23,10 @@ import (
 //     any expression that is not an import or a type of this file, is kept
 //     with Resolved false and no module;
 //   - every other ref gets the module it most likely names, in the form
-//     model.ModulesOf uses. When the ref uses an aliased named import, its
-//     name becomes the imported name, so it can match the definition.
+//     model.ModulesOf uses, and the type its qualifier names in that module
+//     as Container (a class, a Go method expression's type, a Rust type or
+//     inline module). When the ref uses an aliased named import, its name
+//     becomes the imported name, so it can match the definition.
 //
 // Python and Rust modules the file imports by absolute path are kept even
 // when they are probably third-party: nothing in one file tells them apart
@@ -40,7 +42,7 @@ func resolve(f *symbols.File, refs []model.Ref, goModule GoModule) []model.Ref {
 		if ref.Lang == "" && f != nil {
 			ref.Lang = f.Lang
 		}
-		ref.Module, ref.Resolved = "", false
+		ref.Module, ref.Resolved, ref.Container = "", false, ""
 		var keep bool
 		switch model.LangFamily(ref.Lang) {
 		case "go":
@@ -66,7 +68,7 @@ type resolver struct {
 	goModule GoModule
 	imports  []symbols.Import
 	bindings map[string]symbols.Import // by local name; later imports win
-	py       map[string]string         // Python qualifier prefixes to modules (pyBindings)
+	py       map[string]pyBinding      // Python qualifier prefixes (pyBindings)
 	types    map[string]bool           // top-level type-like symbols of the file
 	defined  map[string]bool           // every top-level symbol of the file
 	// rustInline holds the paths of the file's inline Rust modules
@@ -118,6 +120,24 @@ func resolvedTo(ref model.Ref, module string) (model.Ref, bool) {
 
 func unresolved(ref model.Ref) (model.Ref, bool) { return ref, true }
 
+// inType sets what a ref's qualifier names inside its module: a type, a Rust
+// inline module, or "" for the module itself.
+func inType(ref model.Ref, container string) model.Ref {
+	ref.Container = container
+	return ref
+}
+
+// joinName joins container segments with dots, leaving out empty ones.
+func joinName(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "." + b
+}
+
 func dropped() (model.Ref, bool) { return model.Ref{}, false }
 
 // ownModule is the module of the file a ref is made in.
@@ -162,7 +182,7 @@ func (r *resolver) goRef(ref model.Ref) (model.Ref, bool) {
 		return resolvedTo(ref, mod)
 	}
 	if r.types[q] {
-		return resolvedTo(ref, own) // method expression on a type of this package
+		return resolvedTo(inType(ref, q), own) // method expression on a type of this package
 	}
 	return unresolved(ref)
 }
@@ -270,7 +290,7 @@ func (r *resolver) jsRef(ref model.Ref) (model.Ref, bool) {
 		}
 		return resolvedTo(ref, mod)
 	}
-	head, _, _ := strings.Cut(ref.Qualifier, ".")
+	head, rest, _ := strings.Cut(ref.Qualifier, ".")
 	if !isIdent(head) || head == "this" || head == "super" {
 		return unresolved(ref)
 	}
@@ -282,15 +302,31 @@ func (r *resolver) jsRef(ref model.Ref) (model.Ref, bool) {
 		if !ok {
 			return dropped()
 		}
-		return resolvedTo(ref, mod)
+		return resolvedTo(inType(ref, jsContainer(im, rest)), mod)
 	}
 	if r.types[head] {
-		return resolvedTo(ref, ownModule(ref))
+		return resolvedTo(inType(ref, ref.Qualifier), ownModule(ref))
 	}
 	if jsGlobals[head] {
 		return dropped()
 	}
 	return unresolved(ref)
+}
+
+// jsContainer returns the type that a qualifier starting with an import
+// names in the imported module; rest is the qualifier after the import. A
+// namespace import names the module itself. A named or default import names
+// a class when it is capitalized, and otherwise an exported object, whose
+// members are taken for the module's own functions.
+func jsContainer(im symbols.Import, rest string) string {
+	name := im.Local
+	if im.Kind == symbols.ImportNamed && im.Name != "" && im.Name != "default" {
+		name = im.Name
+	}
+	if im.Kind != symbols.ImportNamespace && upperFirst(name) {
+		return joinName(name, rest)
+	}
+	return rest
 }
 
 var jsExts = setOf(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
@@ -353,16 +389,20 @@ func (r *resolver) pyRef(ref model.Ref) (model.Ref, bool) {
 	if head == "self" || head == "cls" || !dottedIdent(ref.Qualifier) {
 		return unresolved(ref) // receivers, super(), calls and subscripts
 	}
-	if m, rest, ok := r.pyLookup(ref.Qualifier); ok {
-		base, ok := pyModule(pkg, m)
+	if b, rest, ok := r.pyLookup(ref.Qualifier); ok {
+		base, ok := pyModule(pkg, b.module)
 		if !ok {
 			return dropped()
 		}
-		return resolvedTo(ref, joinModule(base, rest))
+		if b.class != "" {
+			return resolvedTo(inType(ref, joinName(b.class, strings.Join(rest, "."))), base)
+		}
+		mod, container := joinModule(base, rest)
+		return resolvedTo(inType(ref, container), mod)
 	}
 	switch {
 	case r.types[head]:
-		return resolvedTo(ref, ownModule(ref))
+		return resolvedTo(inType(ref, ref.Qualifier), ownModule(ref))
 	case pyBuiltins[head]:
 		return dropped()
 	}
@@ -370,25 +410,31 @@ func (r *resolver) pyRef(ref model.Ref) (model.Ref, bool) {
 }
 
 // pyLookup finds the import binding that is the longest dotted prefix of a
-// qualifier, and returns its module and the segments after it.
-func (r *resolver) pyLookup(q string) (module string, rest []string, ok bool) {
+// qualifier, and returns it and the segments after it.
+func (r *resolver) pyLookup(q string) (b pyBinding, rest []string, ok bool) {
 	segs := strings.Split(q, ".")
 	for n := len(segs); n > 0; n-- {
-		if m, ok := r.py[strings.Join(segs[:n], ".")]; ok {
-			return m, segs[n:], true
+		if b, ok := r.py[strings.Join(segs[:n], ".")]; ok {
+			return b, segs[n:], true
 		}
 	}
-	return "", nil, false
+	return pyBinding{}, nil, false
 }
 
-// pyBindings maps every name a Python qualifier can start with to the module
-// it stands for, as written (possibly relative):
+// pyBinding is what a Python qualifier prefix stands for: a module as
+// written (possibly relative), and the class in it when the prefix names a
+// class.
+type pyBinding struct{ module, class string }
+
+// pyBindings maps every name a Python qualifier can start with to what it
+// stands for:
 //   - import a.b as c binds c to a.b;
 //   - import a.b binds a.b to a.b and a to a;
-//   - from m import x binds x to the submodule m.x, or to m when x is
-//     capitalized and so most likely a class (Cls.method lives in m).
-func pyBindings(imports []symbols.Import) map[string]string {
-	out := map[string]string{}
+//   - from m import x binds x to the submodule m.x, or to the class x in m
+//     when x is capitalized and so most likely a class (Cls.method lives
+//     in m).
+func pyBindings(imports []symbols.Import) map[string]pyBinding {
+	out := map[string]pyBinding{}
 	for _, im := range imports {
 		switch im.Kind {
 		case symbols.ImportNamespace, symbols.ImportDefault:
@@ -397,24 +443,25 @@ func pyBindings(imports []symbols.Import) map[string]string {
 				continue
 			}
 			if im.Local == im.Module || im.Local == first {
-				out[im.Module] = im.Module
-				out[first] = first
+				out[im.Module] = pyBinding{module: im.Module}
+				out[first] = pyBinding{module: first}
 				continue
 			}
-			out[im.Local] = im.Module
+			out[im.Local] = pyBinding{module: im.Module}
 		case symbols.ImportNamed:
 			if im.Local == "" || im.Local == "_" {
 				continue
 			}
-			m := im.Module
+			b := pyBinding{module: im.Module, class: im.Name}
 			if im.Name != "" && !upperFirst(im.Name) {
-				if strings.Trim(m, ".") == "" {
-					m += im.Name
+				b.class = ""
+				if strings.Trim(b.module, ".") == "" {
+					b.module += im.Name
 				} else {
-					m += "." + im.Name
+					b.module += "." + im.Name
 				}
 			}
-			out[im.Local] = m
+			out[im.Local] = b
 		}
 	}
 	return out
@@ -444,16 +491,18 @@ func pyModule(pkg, m string) (string, bool) {
 }
 
 // joinModule appends qualifier segments to a module up to the first
-// capitalized one, which names a type rather than a module.
-func joinModule(base string, segs []string) string {
+// capitalized one, which names a type rather than a module; it and the
+// segments after it are the container.
+func joinModule(base string, segs []string) (module, container string) {
 	parts := []string{base}
-	for _, s := range segs {
+	for i, s := range segs {
 		if upperFirst(s) {
+			container = strings.Join(segs[i:], ".")
 			break
 		}
 		parts = append(parts, s)
 	}
-	return path.Join(parts...)
+	return path.Join(parts...), container
 }
 
 // Rust
@@ -498,7 +547,7 @@ func (r *resolver) rustRef(ref model.Ref) (model.Ref, bool) {
 	}
 	switch {
 	case r.types[head]:
-		return resolvedTo(ref, ownModule(ref))
+		return resolvedTo(inType(ref, strings.Join(segs, ".")), ownModule(ref))
 	case upperFirst(head) && rustPrelude[head]:
 		return dropped()
 	case upperFirst(head):
@@ -518,9 +567,10 @@ var rustPathKeyword = setOf("crate", "self", "super")
 // nearest src directory, self and super are relative to the file's module,
 // and a path that starts with any other lowercase name is a child module of
 // the file's module (or an extern crate, which then matches nothing). The
-// module ends at the first capitalized segment, which names a type. A path
-// into an inline module of the file names the file itself, whose module its
-// items belong to.
+// module ends at the first capitalized segment, which names a type: the
+// container. A path into an inline module of the file names the file
+// itself, whose module its items belong to, and the inline module leads the
+// container.
 func (r *resolver) rustPath(ref model.Ref, segs []string) (model.Ref, bool) {
 	own := ownModule(ref)
 	base, rest := own, segs
@@ -539,11 +589,13 @@ func (r *resolver) rustPath(ref model.Ref, segs []string) (model.Ref, bool) {
 		return dropped()
 	}
 	parts := []string{base}
-	for _, s := range rest {
+	var container []string
+	for i, s := range rest {
 		if s == "self" {
 			continue
 		}
 		if upperFirst(s) {
+			container = rest[i:]
 			break
 		}
 		parts = append(parts, s)
@@ -551,8 +603,9 @@ func (r *resolver) rustPath(ref model.Ref, segs []string) (model.Ref, bool) {
 	mod := path.Join(parts...)
 	if inner, ok := strings.CutPrefix(mod, own+"/"); ok && r.rustInline[strings.ReplaceAll(inner, "/", ".")] {
 		mod = own
+		container = append(strings.Split(inner, "/"), container...)
 	}
-	return resolvedTo(ref, mod)
+	return resolvedTo(inType(ref, strings.Join(container, ".")), mod)
 }
 
 // rustInlineModules returns the paths of a Rust file's inline modules
