@@ -424,6 +424,8 @@ func (e *Engine) doPublish(ctx context.Context, in api.PublishInput) (*api.Reply
 	if held {
 		c := cv.Claim
 		c.Contract, c.Auto, c.LeaseSeconds, c.UpdatedAt = contract, false, leaseSeconds(e.cfg.Lease), now
+		// The claim shows the symbol as published, also after a transfer.
+		c.Symbol, c.Symbol.Key = cur, c.Key
 		view, err = e.updateClaim(ctx, c, cv.OID, stub)
 	} else {
 		c := e.newClaim(cur, itemID, false, nil)

@@ -108,6 +108,10 @@ shared git remote (GitHub or any git host): refs/gitlet/*, branches
 - **One agent per worktree.** The worktree, not the process, is the unit of
   work. The CLI uses the same agent id as the worktree's MCP session, so a
   person and their agent in one checkout act as one seat.
+- When no MCP session is live for a worktree, nobody ticks, so each CLI verb
+  ends with a tick's upkeep, bounded like a tick: it carries out settled
+  decisions (hand-overs, claims, needs), renews the heartbeat and claims, and
+  detects landed work. A shell-only agent stays a full participant.
 - An agent's own state lives in its local refs. Every write to them, from the
   server or the CLI, reads the local ref, changes it, and writes it back under
   a short per-agent file lock.

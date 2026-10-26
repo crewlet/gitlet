@@ -352,7 +352,7 @@ func (a *app) runVerb(cmd *cobra.Command, v api.Verb, args []string) error {
 	if err != nil {
 		return failed(err)
 	}
-	out, err := a.call(cmd.Context(), engine.Options{Dir: dir, Client: "cli", Agent: agent}, v.Name, in)
+	out, err := a.call(cmd.Context(), engine.Options{Dir: dir, Client: "cli", Agent: agent, Upkeep: true}, v.Name, in)
 	if err != nil {
 		return failed(err)
 	}
@@ -520,8 +520,8 @@ func nonEmpty(vals []string) []string {
 }
 
 // call runs one verb on a fresh engine and closes it. The CLI never holds
-// the session lock and does no background work; the verb itself refreshes
-// stale state.
+// the session lock; the verb refreshes stale state itself, and when no MCP
+// session is live it also does a tick's upkeep (renewals, hand-overs).
 func (a *app) call(ctx context.Context, opt engine.Options, verb string, input any) (api.Output, error) {
 	e, err := a.deps.openEngine(ctx, opt)
 	if err != nil {

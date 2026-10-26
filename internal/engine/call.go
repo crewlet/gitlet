@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/gitlet/internal/api"
 	"github.com/crewlet/gitlet/internal/model"
+	"github.com/crewlet/gitlet/internal/rules"
 )
 
 var errClosed = errors.New("engine: closed")
@@ -50,7 +51,39 @@ func (e *Engine) beginVerb(ctx context.Context, snap bool) (release func(), err 
 			e.verbWarnings = append(e.verbWarnings, "snapshot failed: "+err.Error())
 		}
 	}
-	return e.mu.Unlock, nil
+	before := e.lastView
+	return func() {
+		if v := e.lastView; v != before && v != nil && e.standalone() {
+			e.upkeep(ctx, *v)
+		}
+		e.mu.Unlock()
+	}, nil
+}
+
+// standalone reports whether this engine should do a tick's upkeep after
+// its verbs: it asked to (Options.Upkeep, the CLI) and no session is live
+// for the worktree, so nobody ticks.
+func (e *Engine) standalone() bool {
+	return e.opt.Upkeep && e.session == nil && !e.readOnly() && !e.sessionLive()
+}
+
+// upkeep is the part of the tick that keeps shared state moving, run after
+// a verb on the view the verb evaluated: detect landed work, carry out
+// settled decisions (hand a claim over, claim, record a need), and renew
+// the heartbeat and claims. It is bounded like a tick; problems are only
+// logged, because the verb's result stands.
+func (e *Engine) upkeep(ctx context.Context, v rules.View) {
+	ctx, cancel := context.WithTimeout(ctx, tickBudget)
+	defer cancel()
+	if err := e.applyDecisions(ctx, v); err != nil {
+		e.log.Debug("apply decisions", "err", err)
+	}
+	if err := e.renew(ctx); err != nil {
+		e.log.Debug("renew", "err", err)
+	}
+	if err := e.detectLanding(ctx); err != nil {
+		e.log.Debug("detect landing", "err", err)
+	}
 }
 
 // handler runs one verb with its decoded input, a pointer to the verb's

@@ -32,6 +32,10 @@ type Options struct {
 	Session bool
 	// Offline never contacts the remote (tests, hooks).
 	Offline bool
+	// Upkeep makes verbs do a tick's upkeep (settled decisions, automatic
+	// claims, renewals, landing) when no session is live for the worktree,
+	// because nobody ticks then (the CLI).
+	Upkeep bool
 	// Exe is the gitlet binary used for GIT_SEQUENCE_EDITOR during update;
 	// default os.Executable().
 	Exe    string

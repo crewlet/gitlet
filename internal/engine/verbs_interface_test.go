@@ -599,11 +599,10 @@ func TestIfcPublishRefusals(t *testing.T) {
 	}
 }
 
-// The holder agrees that the other side owns the symbol: until the holder's
-// gitlet hands the claim over, the new owner's publish waits for it rather
-// than offering to give the symbol back.
-func TestIfcPublishWaitsForTheAgreedHandOver(t *testing.T) {
-	p := newIfcPair(t, nil)
+// ifcAgreeThatBOwns sets up a clash on Load in which a holds the claim,
+// proposes that b owns it, and b accepts.
+func ifcAgreeThatBOwns(t *testing.T, p *ifcPair) {
+	t.Helper()
 	ctx := ctxT(t)
 	writeFile(t, p.f.a, "config.go", ifcConfig(ifcLoadStrFn))
 	writeFile(t, p.f.b, "config.go", ifcConfig(ifcLoadCtxFn))
@@ -636,6 +635,15 @@ func TestIfcPublishWaitsForTheAgreedHandOver(t *testing.T) {
 	if !ra.Data.Agreed || ra.Data.Thread.Owner != p.b.Agent().ID {
 		t.Fatalf("after b's accept: %+v", ra.Data)
 	}
+}
+
+// The holder agrees that the other side owns the symbol: until the holder's
+// gitlet hands the claim over, the new owner's publish waits for it rather
+// than offering to give the symbol back.
+func TestIfcPublishWaitsForTheAgreedHandOver(t *testing.T) {
+	p := newIfcPair(t, nil)
+	ctx := ctxT(t)
+	ifcAgreeThatBOwns(t, p)
 
 	// a still holds the claim: b's publish waits for the hand-over.
 	pub, err := p.b.Publish(ctx, api.PublishInput{Symbol: ifcLoad})
@@ -662,6 +670,35 @@ func TestIfcPublishWaitsForTheAgreedHandOver(t *testing.T) {
 	must(t, err)
 	if pub.Outcome != api.OK {
 		t.Fatalf("publish after the hand-over: %s %q %v", pub.Outcome, pub.Summary, pub.Details)
+	}
+}
+
+// Without an MCP session nobody ticks: a CLI verb of the holder (Upkeep)
+// hands the claim over itself, while a plain verb leaves it to the tick.
+func TestIfcCLIVerbHandsTheClaimOver(t *testing.T) {
+	p := newIfcPair(t, nil)
+	ctx := ctxT(t)
+	ifcAgreeThatBOwns(t, p)
+	key := ifcKey("config.go", "Load")
+
+	p.fresh()
+	if _, err := p.a.Status(ctx, api.StatusInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, _ := ifcRemoteClaim(t, p.f, key); c.Owner != p.a.Agent().ID {
+		t.Fatalf("a verb without upkeep moved the claim: %+v", c)
+	}
+	cli := openEngine(t, Options{Dir: p.f.a, Now: p.clk.Now, Client: "cli", Upkeep: true})
+	if cli.Agent().ID != p.a.Agent().ID {
+		t.Fatalf("the CLI is %s, the session %s", cli.Agent().ID, p.a.Agent().ID)
+	}
+	p.fresh()
+	if _, err := cli.Status(ctx, api.StatusInput{}); err != nil {
+		t.Fatal(err)
+	}
+	c, _, ok := ifcRemoteClaim(t, p.f, key)
+	if !ok || c.Owner != p.b.Agent().ID || c.Epoch != 1 {
+		t.Fatalf("claim after a's CLI status: %+v %v, want b's at epoch 1", c, ok)
 	}
 }
 

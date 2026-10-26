@@ -246,7 +246,8 @@ func TestNegotiationAgreement(t *testing.T) {
 		t.Fatalf("A's publish: %+v", pub.Data)
 	}
 	claim, _ = f.claim(t, parseConfigKey)
-	if claim.Owner != p.agentA || claim.Epoch != 1 || claim.Contract == nil || claim.Contract.SigHash != pub.Data.Contract.SigHash {
+	if claim.Owner != p.agentA || claim.Epoch != 1 || claim.Contract == nil || claim.Contract.SigHash != pub.Data.Contract.SigHash ||
+		claim.Symbol.Signature != strictSig {
 		t.Fatalf("claim after A's publish: %+v", claim)
 	}
 	st = b.status()
