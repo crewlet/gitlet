@@ -468,6 +468,13 @@ func (e *Engine) status(ctx context.Context, in api.StatusInput) (*api.Reply[api
 	}
 	data := e.statusData(ctx, v)
 	r := reply(okResult(e.statusSummary(data), statusLines(data, e.me.ID)...), data)
+	for _, iv := range data.Items {
+		if iv.PRClosed {
+			r.Options = append(r.Options, fillIn(toolOption(
+				fmt.Sprintf("stop task %s: its pull request was closed without merging", iv.Item.ID),
+				"abandon", "item", string(iv.Item.ID)), "reason"))
+		}
+	}
 	e.decorate(ctx, &r.Result, true)
 	return r, nil
 }
@@ -497,6 +504,7 @@ func (e *Engine) statusData(ctx context.Context, v rules.View) api.StatusData {
 			Item:        it,
 			Overlaps:    overlaps(it, v),
 			Uncommitted: it.Status == model.ItemActive && dirty,
+			PRClosed:    it.Status == model.ItemSubmitted && e.prClosed[it.ID],
 		})
 	}
 	data.Claims = e.relevantClaims(ctx, v)
@@ -647,6 +655,9 @@ func statusLines(d api.StatusData, me model.AgentID) []string {
 		}
 		if it.PR != "" {
 			line += ", PR " + it.PR
+		}
+		if iv.PRClosed {
+			line += " (closed without merging)"
 		}
 		items = append(items, line)
 		for _, o := range iv.Overlaps {

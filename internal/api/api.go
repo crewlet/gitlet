@@ -196,6 +196,7 @@ type ItemView struct {
 	Item        model.WorkItem `json:"item"`
 	Overlaps    []Overlap      `json:"overlaps,omitempty"`
 	Uncommitted bool           `json:"uncommitted,omitempty"`
+	PRClosed    bool           `json:"prClosed,omitempty"` // submitted, and its pull request was closed without merging
 }
 
 // ClaimInfo is a claim as reported to users.

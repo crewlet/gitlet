@@ -480,7 +480,8 @@ A work item is one task on one branch in one worktree.
   branch. It stops the active item, or the item `item` names. A submitted
   item can be abandoned too, for example when its PR was closed unmerged
   (it would otherwise never land and keep its claims); its PR is left as it
-  is.
+  is. When `gh` reports a submitted item's PR closed without merging,
+  `status` says so and offers `abandon` for it.
 
 ## 8. Leases, liveness and visibility
 

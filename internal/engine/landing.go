@@ -85,7 +85,8 @@ func (e *Engine) itemLanded(ctx context.Context, it model.WorkItem, main string)
 
 // ghMerged asks gh whether the item's pull request was merged, at most
 // every ghEvery per item and within ghTimeout. A missing, unauthenticated
-// or slow gh means "not known".
+// or slow gh means "not known". A pull request closed without merging is
+// remembered for status, which offers to abandon the task.
 func (e *Engine) ghMerged(ctx context.Context, it model.WorkItem) bool {
 	if it.PR == "" || e.bus.Remote() == "" {
 		return false
@@ -105,7 +106,16 @@ func (e *Engine) ghMerged(ctx context.Context, it model.WorkItem) bool {
 	cmd.Dir = e.repo.Root
 	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1", "NO_COLOR=1")
 	out, err := cmd.Output()
-	return err == nil && strings.TrimSpace(string(out)) == "MERGED"
+	if err != nil {
+		return false
+	}
+	state := strings.TrimSpace(string(out))
+	if state == "CLOSED" {
+		e.prClosed[it.ID] = true
+	} else {
+		delete(e.prClosed, it.ID)
+	}
+	return state == "MERGED"
 }
 
 // land marks a submitted item landed and drops what it leaves behind

@@ -1025,6 +1025,72 @@ func TestFlowSubmitChecksContracts(t *testing.T) {
 	}
 }
 
+// A pull request closed without merging leaves the task submitted: status
+// says so and offers to abandon it.
+func TestFlowClosedPullRequestOffersAbandon(t *testing.T) {
+	requireDeps(t)
+	dir := t.TempDir()
+	created, state := filepath.Join(dir, "created"), filepath.Join(dir, "state")
+	writeFile(t, dir, "state", "OPEN\n")
+	flowPath(t, `#!/bin/sh
+case "$1 $2" in
+"pr view")
+	for a in "$@"; do
+		if [ "$a" = "--jq" ]; then
+			while read -r s; do printf '%s\n' "$s"; done < '`+state+`'
+			exit 0
+		fi
+	done
+	if [ -f '`+created+`' ]; then
+		printf '{"url":"%s","state":"OPEN"}\n' '`+flowPRURL+`'
+		exit 0
+	fi
+	echo 'no pull requests found for branch' >&2
+	exit 1 ;;
+"pr create")
+	: > '`+created+`'
+	printf '%s\n' '`+flowPRURL+`'
+	exit 0 ;;
+esac
+exit 1
+`)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	item, _ := flowStart(t, ctx, ea, "Use gitlet.json by default")
+	flowCommit(t, f.a, "default: use gitlet.json", "default.go", strings.Replace(mainGo, "gitlet.toml", "gitlet.json", 1))
+	r, err := ea.Submit(ctx, api.SubmitInput{})
+	must(t, err)
+	flowWant(t, "submit", r.Result, api.OK)
+
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	st, err := ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	if len(st.Data.Items) != 1 || st.Data.Items[0].PRClosed || len(st.Options) != 0 {
+		t.Fatalf("open pull request: items %+v options %+v", st.Data.Items, st.Options)
+	}
+
+	writeFile(t, dir, "state", "CLOSED\n")
+	clk.Advance(ghEvery + time.Minute)
+	must(t, ea.Tick(ctx))
+	st, err = ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	if len(st.Data.Items) != 1 || !st.Data.Items[0].PRClosed || st.Data.Items[0].Item.Status != model.ItemSubmitted {
+		t.Fatalf("closed pull request: items %+v", st.Data.Items)
+	}
+	if len(st.Options) != 1 || st.Options[0].Tool != "abandon" || st.Options[0].Args["item"] != string(item) {
+		t.Fatalf("options %+v", st.Options)
+	}
+	if !slices.ContainsFunc(st.Details, func(d string) bool { return strings.Contains(d, "closed without merging") }) {
+		t.Errorf("details %q", st.Details)
+	}
+	ab, err := ea.Abandon(ctx, api.AbandonInput{Item: string(item), Reason: "the pull request was closed"})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+}
+
 func TestFlowSubmitPushesAndOpensPullRequest(t *testing.T) {
 	requireDeps(t)
 	ghLog := flowFakeGh(t)
