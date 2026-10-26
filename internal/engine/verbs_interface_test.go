@@ -850,7 +850,9 @@ func TestIfcUsePicksAndPinsTheStub(t *testing.T) {
 	dirty, err := p.b.Use(ctx, api.UseInput{Symbol: ifcLoad})
 	must(t, err)
 	ifcRefused(t, "use with uncommitted changes", dirty.Result)
-	if len(dirty.Options) == 0 || !strings.Contains(dirty.Options[0].Command, "git add -- config.go") {
+	// The commit runs as written in an agent's shell, which has no editor:
+	// its message is a placeholder to fill in.
+	if len(dirty.Options) == 0 || dirty.Options[0].Command != `git add -- config.go && git commit -m "..."` {
 		t.Errorf("no commit instruction: %+v", dirty.Options)
 	}
 	runGit(t, p.f.b, "checkout", "--", "config.go")

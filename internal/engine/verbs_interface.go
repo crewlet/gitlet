@@ -1005,7 +1005,8 @@ func (e *Engine) doUse(ctx context.Context, in api.UseInput) (*api.Reply[api.Use
 		}
 		return reply(refused(fmt.Sprintf("Cannot use %s: commit your changes to %s first.", ref, joinCapped(dirty, maxDetailNames)),
 			[]string{"use cherry-picks the stub onto your branch, so the files it touches must have no uncommitted changes"},
-			cmdOption("commit them, then call use again", "git add -- "+strings.Join(quoted, " ")+" && git commit")), none), nil
+			cmdOption("commit them", "git add -- "+strings.Join(quoted, " ")+` && git commit -m "..."`),
+			toolOption("then call use again", "use", "symbol", ref, "note", in.Note)), none), nil
 	}
 	staged, err := e.stagedPaths(ctx)
 	if err != nil {
