@@ -1,69 +1,212 @@
 package bus
 
-// TODO(implement): docs/SPEC.md, section 6.
-
 import (
 	"context"
 	"errors"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/gitlet/internal/gitx"
 	"github.com/crewlet/gitlet/internal/model"
 )
 
-var errNotImplemented = errors.New("bus: not implemented")
+// The real repository is the Repo the bus is built for.
+var _ Repo = (*gitx.Repo)(nil)
 
-type impl struct{}
+const (
+	defaultFetchReuse = 5 * time.Second
+	// observerRetry is how long the bus stays read-only after the remote
+	// refused a push for lack of permission; the next push after it is the
+	// re-probe (docs/SPEC.md, section 6.1).
+	observerRetry = time.Hour
+	// settledAge is how long landed and abandoned items stay in state.json
+	// (docs/SPEC.md, section 6.4).
+	settledAge = time.Hour
+)
 
-func trackingRef(remote, ref string) string { return ref }
+// Files and messages of metadata commits (docs/SPEC.md, section 6).
+const (
+	stateFile     = "state.json"
+	outboxFile    = "outbox.json"
+	claimFile     = "claim.json"
+	probeFile     = "probe.json"
+	stateMessage  = "gitlet: state"
+	outboxMessage = "gitlet: outbox"
+	claimMessage  = "gitlet: claim"
+	probeMessage  = "gitlet: probe"
+)
 
-func newBus(repo Repo, me model.AgentID, opt Options) *Bus { return &Bus{} }
-func (b *Bus) remote() string                              { return "" }
-func (b *Bus) mainRef() string                             { return "" }
-func (b *Bus) fetch(ctx context.Context) (FetchResult, error) {
-	return FetchResult{}, errNotImplemented
+// Local namespaces fetches write into.
+const (
+	remotePrefix = "refs/gitlet-remote/" // + <remote>/agents/..., claims/..., wip/...
+	mainPrefix   = "refs/gitlet-main/"   // + <remote>
+	headsPrefix  = "refs/gitlet-heads/"  // + <remote>/<branch>
+)
+
+var errNoRemote = errors.New("no remote configured")
+
+type impl struct {
+	repo       Repo
+	me         model.AgentID
+	remoteName string
+	mainBranch string
+	lockDir    string
+	pushLog    PushLog
+	now        func() time.Time
+	fetchReuse time.Duration
+
+	// isNetwork and isPermission classify failed git invocations. They are
+	// gitx's classifiers; tests replace them because those need real git
+	// output to recognise a failure.
+	isNetwork    func(error) bool
+	isPermission func(error) bool
+
+	// writeMu serializes writes of this agent's own refs within the process,
+	// so the local compare-and-swap, the push and the push log stay in step.
+	writeMu sync.Mutex
+
+	obsMu         sync.Mutex
+	observerSince time.Time // when a push was last refused for permission; zero when writable
 }
-func (b *Bus) fetchOutside(ctx context.Context, window time.Duration, max int) ([]gitx.RefInfo, error) {
-	return nil, errNotImplemented
+
+func trackingRef(remote, ref string) string {
+	if remote == "" || !strings.HasPrefix(ref, Prefix) {
+		return ref
+	}
+	return remotePrefix + remote + "/" + strings.TrimPrefix(ref, Prefix)
 }
-func (b *Bus) fetchWip(ctx context.Context, agent model.AgentID, item model.ItemID, want string) (string, error) {
-	return "", errNotImplemented
+
+func newBus(repo Repo, me model.AgentID, opt Options) *Bus {
+	b := &Bus{impl{
+		repo:         repo,
+		me:           me,
+		remoteName:   opt.Remote,
+		mainBranch:   opt.Main,
+		lockDir:      opt.LockDir,
+		pushLog:      opt.PushLog,
+		now:          opt.Now,
+		fetchReuse:   opt.FetchReuse,
+		isNetwork:    gitx.IsNetwork,
+		isPermission: gitx.IsPermission,
+	}}
+	if b.mainBranch == "" {
+		b.mainBranch = "main"
+	}
+	if b.pushLog == nil {
+		b.pushLog = &memPushLog{m: map[string]string{}}
+	}
+	if b.now == nil {
+		b.now = time.Now
+	}
+	if b.fetchReuse == 0 {
+		b.fetchReuse = defaultFetchReuse
+	}
+	return b
 }
-func (b *Bus) pruneWips(ctx context.Context, keep map[string]bool) error { return errNotImplemented }
-func (b *Bus) load(ctx context.Context) (*State, error)                  { return nil, errNotImplemented }
-func (b *Bus) readOwnState(ctx context.Context) (model.AgentState, string, error) {
-	return model.AgentState{}, "", errNotImplemented
+
+func (b *Bus) remote() string { return b.remoteName }
+
+func (b *Bus) mainRef() string {
+	if b.remoteName == "" {
+		return "refs/heads/" + b.mainBranch
+	}
+	return mainPrefix + b.remoteName
 }
-func (b *Bus) readOwnOutbox(ctx context.Context) (model.Outbox, string, error) {
-	return model.Outbox{}, "", errNotImplemented
+
+// tracking returns where fetches put the canonical ref.
+func (b *Bus) tracking(ref string) string { return trackingRef(b.remoteName, ref) }
+
+// localOID returns the oid ref points at, or "" when it does not exist.
+func (b *Bus) localOID(ctx context.Context, ref string) (string, error) {
+	oid, err := b.repo.RevParse(ctx, ref)
+	if errors.Is(err, gitx.ErrNotFound) {
+		return "", nil
+	}
+	return oid, err
 }
-func (b *Bus) writeState(ctx context.Context, st model.AgentState, seenOID string) (string, error) {
-	return "", errNotImplemented
+
+// listCanonical lists the local refs under the canonical prefix, or under its
+// tracking location when tracking is set, keyed by canonical name.
+func (b *Bus) listCanonical(ctx context.Context, prefix string, tracking bool) (map[string]string, error) {
+	local := prefix
+	if tracking {
+		local = b.tracking(prefix)
+	}
+	refs, err := b.repo.ListRefs(ctx, local)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(refs))
+	for name, oid := range refs {
+		if rest, ok := strings.CutPrefix(name, local); ok {
+			out[prefix+rest] = oid
+		}
+	}
+	return out, nil
 }
-func (b *Bus) writeOutbox(ctx context.Context, ob model.Outbox, seenOID string) (string, error) {
-	return "", errNotImplemented
+
+// ownRefs returns this agent's state, outbox and wip refs, from the local
+// namespace or from their tracking copies, keyed by canonical name.
+func (b *Bus) ownRefs(ctx context.Context, tracking bool) (map[string]string, error) {
+	out := map[string]string{}
+	for _, prefix := range []string{AgentsPrefix + string(b.me) + "/", WipPrefix + string(b.me) + "/"} {
+		refs, err := b.listCanonical(ctx, prefix, tracking)
+		if err != nil {
+			return nil, err
+		}
+		for ref, oid := range refs {
+			if b.isOwnRef(ref) {
+				out[ref] = oid
+			}
+		}
+	}
+	return out, nil
 }
-func (b *Bus) writeWip(ctx context.Context, item model.ItemID, commit string) error {
-	return errNotImplemented
+
+// isOwnRef reports whether ref is one of this agent's state, outbox or wip refs.
+func (b *Bus) isOwnRef(ref string) bool {
+	if ref == StateRef(b.me) || ref == OutboxRef(b.me) {
+		return true
+	}
+	item, ok := strings.CutPrefix(ref, WipPrefix+string(b.me)+"/")
+	return ok && model.ValidItemID(model.ItemID(item))
 }
-func (b *Bus) deleteWip(ctx context.Context, item model.ItemID) error { return errNotImplemented }
-func (b *Bus) deleteOwn(ctx context.Context) error                    { return errNotImplemented }
-func (b *Bus) flush(ctx context.Context) error                        { return errNotImplemented }
-func (b *Bus) createClaim(ctx context.Context, c model.Claim, parent string) (bool, ClaimView, error) {
-	return false, ClaimView{}, errNotImplemented
+
+// isWipRef reports whether ref is a snapshot ref.
+func isWipRef(ref string) bool { return strings.HasPrefix(ref, WipPrefix) }
+
+// sortedKeys returns the keys of m in order.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
-func (b *Bus) updateClaim(ctx context.Context, c model.Claim, seenOID, parent string) (ClaimView, error) {
-	return ClaimView{}, errNotImplemented
+
+// memPushLog is the PushLog used when Options has none: it lasts as long as
+// the process.
+type memPushLog struct {
+	mu sync.Mutex
+	m  map[string]string
 }
-func (b *Bus) updateClaims(ctx context.Context, updates []ClaimUpdate) ([]ClaimOutcome, error) {
-	return nil, errNotImplemented
+
+func (l *memPushLog) LastPushed(_ context.Context, ref string) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.m[ref], nil
 }
-func (b *Bus) deleteClaim(ctx context.Context, key, seenOID string) error { return errNotImplemented }
-func (b *Bus) refreshMain(ctx context.Context) (string, error)            { return "", errNotImplemented }
-func (b *Bus) pushBranch(ctx context.Context, commit, branch, oldOID string) (gitx.PushResult, error) {
-	return gitx.PushResult{}, errNotImplemented
-}
-func (b *Bus) reap(ctx context.Context, refs map[string]string) error { return errNotImplemented }
-func (b *Bus) probe(ctx context.Context) (ProbeResult, error) {
-	return ProbeResult{}, errNotImplemented
+
+func (l *memPushLog) SetLastPushed(_ context.Context, ref, oid string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if oid == "" {
+		delete(l.m, ref)
+	} else {
+		l.m[ref] = oid
+	}
+	return nil
 }
