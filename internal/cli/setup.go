@@ -356,6 +356,8 @@ func (a *app) doctorRepo(ctx context.Context, repo *gitx.Repo, add func(status, 
 	switch {
 	case cfgErr != nil:
 		add("fail", "config", "%v", cfgErr)
+	case cfg.Remote == "" && cfg.RemoteNote() != "":
+		add("warn", "remote", "none: %s", cfg.RemoteNote())
 	case cfg.Remote == "":
 		add("warn", "remote", "none: local mode, for agents in worktrees of this clone only (main branch %s)", cfg.Main)
 	default:

@@ -370,7 +370,9 @@ The server's instructions summarize the workflow in section 13.
 
 ### 6.3 Without a remote, and when it is unreachable
 
-- **No remote** (`gitlet.remote` is `none`, or the repository has no remotes):
+- **No remote** (`gitlet.remote` is `none`; or it is unset and the repository
+  has no remotes, or several and none called `origin`, in which case `doctor`
+  says how to choose one):
   the bus reads and writes `refs/gitlet/*` in the shared `.git` directly, for
   agents in several worktrees on one machine. Compare-and-swap uses
   `git update-ref` with the old value. `submit` runs its checks and marks the
@@ -984,7 +986,7 @@ Read from git config (`git config gitlet.<name>`):
 
 | Key | Default |
 |---|---|
-| `gitlet.remote` | `origin` if it exists, else the only remote, else none (`none` forces local mode) |
+| `gitlet.remote` | `origin` if it exists, else the only remote, else none: no remotes, or several without `origin`, means local mode (`none` forces it) |
 | `gitlet.main` | the remote's HEAD branch from `refs/remotes/<remote>/HEAD`, else `main`, else `master` (resolved locally, never over the network) |
 | `gitlet.branchPrefix` | `gitlet/` |
 | `gitlet.snapshotInterval` | `45s` |

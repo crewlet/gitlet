@@ -178,7 +178,7 @@ Settings live in git config under `gitlet.*`. The common ones:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `gitlet.remote` | `origin`, else the only remote | `none` forces local mode |
+| `gitlet.remote` | `origin`, else the only remote | the remote agents share; with several remotes and no `origin`, gitlet runs in local mode until you set it; `none` forces local mode |
 | `gitlet.main` | the remote's HEAD branch, else `main`, else `master` | the branch work lands on |
 | `gitlet.branchPrefix` | `gitlet/` | prefix for branches `start` creates |
 | `gitlet.snapshotUntracked` | `source` | which untracked files snapshots include: `source`, `all` or `none` |

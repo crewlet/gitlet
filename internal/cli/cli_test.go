@@ -784,6 +784,21 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+func TestIntegrationDoctorSeveralRemotes(t *testing.T) {
+	dir := tempRepo(t)
+	runGit(t, dir, "remote", "add", "upstream", filepath.Join(t.TempDir(), "upstream.git"))
+	runGit(t, dir, "remote", "add", "public", filepath.Join(t.TempDir(), "public.git"))
+	ta := newTestApp(t)
+	ta.app.deps.openRepo = gitx.Open
+	ta.run("doctor", "--worktree", dir)
+	out := ta.stdout.String()
+	for _, w := range []string{"warn  remote", "the remotes public, upstream exist, none is origin", "git config gitlet.remote <name>", "skip  ref access"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("doctor output does not mention %q:\n%s", w, out)
+		}
+	}
+}
+
 func TestIntegrationInitDryRun(t *testing.T) {
 	dir := tempRepo(t)
 	var stdout, stderr bytes.Buffer

@@ -5,7 +5,7 @@ package config
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +14,11 @@ import (
 // Config is gitlet's effective configuration for one repository
 // (docs/SPEC.md, section 15).
 type Config struct {
-	Remote            string // "" when gitlet runs without a remote
+	Remote string // "" when gitlet runs without a remote
+	// AmbiguousRemotes lists the remotes, sorted, when there are several,
+	// none is origin and gitlet.remote is unset. gitlet then runs in local
+	// mode rather than guess which remote its peers use (RemoteNote).
+	AmbiguousRemotes  []string
 	Main              string // main branch short name
 	BranchPrefix      string
 	SnapshotInterval  time.Duration
@@ -88,15 +92,17 @@ func Load(ctx context.Context, src Source) (Config, error) {
 		if err != nil {
 			return c, err
 		}
-		for _, r := range remotes {
-			if r == "origin" {
-				remote = r
-			}
-		}
-		if remote == "" && len(remotes) > 0 {
-			sorted := append([]string(nil), remotes...)
-			sort.Strings(sorted)
-			remote = sorted[0]
+		// origin, else the only remote, else none (docs/SPEC.md, section
+		// 15). Picking one of several by name could publish work to a
+		// mirror, and peers whose clones name the remotes differently would
+		// pick another and never see each other.
+		switch {
+		case slices.Contains(remotes, "origin"):
+			remote = "origin"
+		case len(remotes) == 1:
+			remote = remotes[0]
+		case len(remotes) > 1:
+			c.AmbiguousRemotes = slices.Sorted(slices.Values(remotes))
 		}
 	} else if remote == "none" {
 		remote = ""
@@ -234,6 +240,17 @@ func Load(ctx context.Context, src Source) (Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// RemoteNote explains, for doctor and status, why gitlet runs in local mode
+// when the remote is ambiguous, and how to choose one. It is "" otherwise.
+func (c Config) RemoteNote() string {
+	if len(c.AmbiguousRemotes) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("the remotes %s exist, none is origin and gitlet.remote is unset, so gitlet runs in local mode; "+
+		"choose the one every agent shares with git config gitlet.remote <name> (none keeps local mode)",
+		strings.Join(c.AmbiguousRemotes, ", "))
 }
 
 // ParseSize parses sizes like "5MiB", "512KiB", "1048576", "2MB".

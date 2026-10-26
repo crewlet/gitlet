@@ -2,6 +2,8 @@ package config
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,16 +45,19 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadRemoteChoice(t *testing.T) {
 	tests := []struct {
-		name    string
-		values  map[string][]string
-		remotes []string
-		want    string
+		name      string
+		values    map[string][]string
+		remotes   []string
+		want      string
+		ambiguous []string
 	}{
-		{"no remotes", nil, nil, ""},
-		{"single non-origin", nil, []string{"github"}, "github"},
-		{"several without origin picks first sorted", nil, []string{"zeta", "alpha"}, "alpha"},
-		{"explicit none", map[string][]string{"gitlet.remote": {"none"}}, []string{"origin"}, ""},
-		{"explicit", map[string][]string{"gitlet.remote": {"fork"}}, []string{"origin", "fork"}, "fork"},
+		{"no remotes", nil, nil, "", nil},
+		{"single non-origin", nil, []string{"github"}, "github", nil},
+		{"several without origin is local mode", nil, []string{"zeta", "alpha"}, "", []string{"alpha", "zeta"}},
+		{"several with origin", nil, []string{"upstream", "origin"}, "origin", nil},
+		{"explicit none", map[string][]string{"gitlet.remote": {"none"}}, []string{"origin"}, "", nil},
+		{"explicit", map[string][]string{"gitlet.remote": {"fork"}}, []string{"origin", "fork"}, "fork", nil},
+		{"explicit among several", map[string][]string{"gitlet.remote": {"zeta"}}, []string{"zeta", "alpha"}, "zeta", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -62,6 +67,15 @@ func TestLoadRemoteChoice(t *testing.T) {
 			}
 			if c.Remote != tt.want {
 				t.Fatalf("remote = %q, want %q", c.Remote, tt.want)
+			}
+			if !slices.Equal(c.AmbiguousRemotes, tt.ambiguous) {
+				t.Fatalf("ambiguous remotes = %q, want %q", c.AmbiguousRemotes, tt.ambiguous)
+			}
+			switch note := c.RemoteNote(); {
+			case tt.ambiguous == nil && note != "":
+				t.Fatalf("remote note = %q, want none", note)
+			case tt.ambiguous != nil && !strings.Contains(note, "git config gitlet.remote"):
+				t.Fatalf("remote note = %q, want it to say how to choose", note)
 			}
 			if c.Main != "main" {
 				t.Fatalf("main = %q, want main", c.Main)
