@@ -184,7 +184,7 @@ func (e *Engine) resolveSymbol(ctx context.Context, verb, arg string, extra ...a
 	isPath := e.pathChecker(ctx)
 	q, err := parseSymbolArg(arg, isPath)
 	if err != nil {
-		r := refused(fmt.Sprintf("Cannot %s %q: %v.", verb, strings.TrimSpace(arg), err), nil,
+		r := refused(fmt.Sprintf("Cannot read %q as a symbol: %v.", strings.TrimSpace(arg), err), nil,
 			toolOption("name the symbol as path:Qualified", verb, extra...))
 		return model.Symbol{}, &r, nil
 	}
@@ -503,7 +503,7 @@ func (e *Engine) resolveTarget(ctx context.Context, verb, arg string, allowLine 
 		if allowLine {
 			example = "src/config.ts, src/config.ts:42 or src/config.ts:parseConfig"
 		}
-		r := refused(fmt.Sprintf("Cannot %s %q: %v.", verb, strings.TrimSpace(arg), err), []string{"targets look like " + example},
+		r := refused(fmt.Sprintf("Cannot read %q as a file or symbol: %v.", strings.TrimSpace(arg), err), []string{"targets look like " + example},
 			toolOption("name a file or symbol", verb))
 		return target{}, &r, nil
 	}

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -88,7 +89,7 @@ func (e *Engine) doStart(ctx context.Context, in api.StartInput) (*api.Reply[api
 	}
 	branch, newBranch := cur, false
 	var details []string
-	left, leaving := e.finishedBranchItem(cur)
+	left, leaving := e.finishedBranchItem(ctx, cur)
 	if cur == "" || cur == e.cfg.Main || leaving {
 		name := strings.TrimSpace(in.Branch)
 		if name == "" {
@@ -214,8 +215,10 @@ func (e *Engine) activeRefusal(it model.WorkItem) api.Result {
 
 // finishedBranchItem returns my item on branch that is no longer active
 // (submitted, landed or abandoned), preferring a submitted one. A new task
-// never stays on such a branch.
-func (e *Engine) finishedBranchItem(branch string) (model.WorkItem, bool) {
+// never stays on such a branch. Items closed long ago are no longer in my
+// state; the ledger remembers their branches (rememberFinished) for as long
+// as the branch still holds the commit it had then.
+func (e *Engine) finishedBranchItem(ctx context.Context, branch string) (model.WorkItem, bool) {
 	var found model.WorkItem
 	ok := false
 	if branch == "" || branch == e.cfg.Main {
@@ -226,7 +229,62 @@ func (e *Engine) finishedBranchItem(branch string) (model.WorkItem, bool) {
 			found, ok = it, true
 		}
 	}
-	return found, ok
+	if ok {
+		return found, true
+	}
+	for _, it := range e.myState().Items {
+		if it.Branch == branch && it.Status == model.ItemActive {
+			return found, false
+		}
+	}
+	v, have, err := e.led.Get(ctx, e.finishedKey(branch))
+	if err != nil || !have {
+		return found, false
+	}
+	var f finishedBranch
+	if json.Unmarshal([]byte(v), &f) != nil || f.Head == "" {
+		return found, false
+	}
+	if held, err := e.repo.IsAncestor(ctx, f.Head, "refs/heads/"+branch); err != nil || !held {
+		return found, false // the branch was made again for other work
+	}
+	return f.Item, true
+}
+
+// finishedBranch is what the ledger remembers about a closed item's branch.
+type finishedBranch struct {
+	Item model.WorkItem `json:"item"` // id, intent, branch, status and PR only
+	Head string         `json:"head"` // the branch's commit when the item closed
+}
+
+func (e *Engine) finishedKey(branch string) string {
+	return "finished-branch/" + string(e.me.ID) + "/" + branch
+}
+
+// rememberFinished records the branch of an item that landed or was
+// abandoned, so start still leaves it after the item is trimmed from my
+// state. Best effort: without it start only knows recent items.
+func (e *Engine) rememberFinished(ctx context.Context, id model.ItemID) {
+	items := e.myState().Items
+	i := itemIndex(items, id)
+	if i < 0 || items[i].Branch == "" || items[i].Branch == e.cfg.Main || e.led.ReadOnly() {
+		return
+	}
+	it := items[i]
+	head, err := e.repo.RevParse(ctx, "refs/heads/"+it.Branch)
+	if err != nil {
+		return
+	}
+	b, err := json.Marshal(finishedBranch{
+		Item: model.WorkItem{ID: it.ID, Intent: it.Intent, Branch: it.Branch, Status: it.Status, PR: it.PR},
+		Head: head,
+	})
+	if err == nil {
+		err = e.led.Set(ctx, e.finishedKey(it.Branch), string(b))
+	}
+	if err != nil {
+		e.log.Debug("remember finished branch", "item", id, "err", err)
+	}
 }
 
 // carryRefusal refuses start when uncommitted changes cannot come along to
@@ -271,7 +329,7 @@ func (e *Engine) createWorkBranch(ctx context.Context, name, from, intent string
 	}
 	if exists {
 		opts := []model.Option{toolOption("use another branch name", "start", "intent", intent, "branch", name+"-2")}
-		if _, finished := e.finishedBranchItem(name); !finished {
+		if _, finished := e.finishedBranchItem(ctx, name); !finished {
 			opts = append(opts, cmdOption("or switch to it and start there", "git switch "+shellQuote(name)))
 		}
 		r := refused(fmt.Sprintf("Branch %s already exists.", name), nil, opts...)
@@ -281,7 +339,8 @@ func (e *Engine) createWorkBranch(ctx context.Context, name, from, intent string
 		var gerr *gitx.Error
 		if errors.As(err, &gerr) {
 			r := refused(fmt.Sprintf("Could not create branch %s: %s", name, firstLine(gerr.Stderr)), nil,
-				cmdOption("see what is in the way", "git status"))
+				cmdOption("see what is in the way", "git status"),
+				toolOption("start again once it is fixed", "start", "intent", intent, "branch", name))
 			return &r, nil
 		}
 		return nil, fmt.Errorf("engine: start: %w", err)

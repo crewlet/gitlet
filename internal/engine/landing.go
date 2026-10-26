@@ -150,6 +150,7 @@ func (e *Engine) land(ctx context.Context, it model.WorkItem) error {
 // rules' Releases retry claims); an outbox write that fails is an error.
 // abandon uses it too.
 func (e *Engine) releaseItem(ctx context.Context, item model.ItemID) ([]string, error) {
+	e.rememberFinished(ctx, item)
 	var released []string
 	for _, cv := range e.myClaims() {
 		if cv.Claim.Item != item {

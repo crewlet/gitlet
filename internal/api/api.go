@@ -60,7 +60,7 @@ type Where struct {
 
 type StartInput struct {
 	Intent string   `json:"intent" jsonschema:"your task in one sentence, e.g. Add strict mode to config loading"`
-	Branch string   `json:"branch,omitempty" jsonschema:"branch to create when on main; default gitlet/<slug>-<id>"`
+	Branch string   `json:"branch,omitempty" jsonschema:"name of the branch start creates (on main, a detached HEAD or a finished task's branch); default gitlet/<slug>-<id>"`
 	Paths  []string `json:"paths,omitempty" jsonschema:"files you plan to touch, checked for overlap now"`
 	Where
 }
@@ -400,7 +400,7 @@ var Verbs = []Verb{
 		Summary: "Call before you edit code for a new task. States your task, puts you on a work branch, and shows anyone already doing similar or overlapping work.",
 		Args: []Arg{
 			{Name: "intent", Required: true, Kind: KindString, Help: "your task in one sentence"},
-			{Name: "branch", Kind: KindString, Help: "branch to create when on main"},
+			{Name: "branch", Kind: KindString, Help: "name of the branch start creates (on main, a detached HEAD or a finished task's branch)"},
 			{Name: "paths", Kind: KindStrings, Help: "files you plan to touch"},
 		},
 		Input: t[StartInput](), Data: t[StartData](),

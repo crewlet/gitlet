@@ -1367,6 +1367,66 @@ func TestFlowStartLeavesTheBranchOfAFinishedTask(t *testing.T) {
 	}
 }
 
+// Closed tasks leave my state after closedRetention; start still knows
+// their branches from the ledger, until the branch is made again.
+func TestFlowStartLeavesAFinishedBranchAfterCleanup(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	main := runGit(t, f.a, "rev-parse", "origin/main")
+
+	_, old := flowStart(t, ctx, ea, "Rename the default configuration file")
+	flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+	ab, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+
+	// A later task's state write trims the abandoned one.
+	clk.Advance(closedRetention + time.Hour)
+	runGit(t, f.a, "switch", "-q", "main")
+	flowStart(t, ctx, ea, "Document the configuration")
+	if _, err := ea.Abandon(ctx, api.AbandonInput{}); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(closedRetention + time.Hour)
+	st, err := ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	for _, iv := range st.Data.Items {
+		if iv.Item.Branch == old {
+			t.Fatalf("the abandoned task is still in state: %+v", iv.Item)
+		}
+	}
+
+	runGit(t, f.a, "switch", "-q", old)
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Read the configuration from the environment"})
+	must(t, err)
+	flowWant(t, "start on the old branch", r.Result, api.OK)
+	if !r.Data.NewBranch || r.Data.Branch == old || runGit(t, f.a, "rev-parse", "HEAD") != main {
+		t.Fatalf("start on %s: branch %q (new %v) at %s, want a new branch at main", old, r.Data.Branch, r.Data.NewBranch, runGit(t, f.a, "rev-parse", "HEAD"))
+	}
+	if !slices.ContainsFunc(r.Details, func(d string) bool { return strings.Contains(d, old) && strings.Contains(d, "abandoned") }) {
+		t.Errorf("details %v", r.Details)
+	}
+	if _, err := ea.Abandon(ctx, api.AbandonInput{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same name made again for other work is a branch like any other.
+	runGit(t, f.a, "switch", "-q", "main")
+	runGit(t, f.a, "branch", "-D", old)
+	runGit(t, f.a, "switch", "-q", "-c", old)
+	flowCommit(t, f.a, "readme: other work", "README.md", "# demo\n\nOther work.\n")
+	clk.Advance(time.Minute)
+	r, err = ea.Start(ctx, api.StartInput{Intent: "Other work on a reused name"})
+	must(t, err)
+	flowWant(t, "start on a remade branch", r.Result, api.OK)
+	if r.Data.NewBranch || r.Data.Branch != old {
+		t.Errorf("start on the remade %s: branch %q (new %v), want to stay", old, r.Data.Branch, r.Data.NewBranch)
+	}
+}
+
 // ---- abandon ----
 
 func TestFlowAbandon(t *testing.T) {
