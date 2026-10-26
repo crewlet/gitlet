@@ -2,9 +2,13 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -343,27 +347,107 @@ func (e *Engine) holdsCommitOf(ctx context.Context, tip, head, main string) bool
 }
 
 // patchIDs returns the patch id of each commit revs list, merges and
-// commits that change nothing aside: git patch-id --stable over diffs
-// without context lines, so a commit rebased onto a main that changed lines
-// next to its own keeps its id. git's --cherry-pick diffs with three lines
-// of context and takes such a commit for another change.
+// commits that change nothing aside, from its diff without context lines,
+// so a commit rebased onto a main that changed lines next to its own keeps
+// its id. git's --cherry-pick diffs with three lines of context and takes
+// such a commit for another change. The ids are computed here
+// (parsePatchIDs) rather than by git patch-id, whose parser before git 2.36
+// misreads the hunk headers of one-line changes and before 2.39 gives every
+// binary change to a path the same id.
 func (e *Engine) patchIDs(ctx context.Context, revs ...string) (map[string]string, error) {
-	args := []string{"log", "--no-show-signature", "--no-merges", "--no-color", "-p", "-U0", "--full-index", "--format=commit %H"}
+	args := []string{"log", "--no-show-signature", "--no-merges", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--no-renames", "-p", "-U0", "--full-index", "--format=commit %H"}
 	out, err := e.bg.Run(ctx, append(append(args, revs...), "--")...)
-	if err != nil || out == "" {
-		return nil, err
-	}
-	out, err = e.bg.RunInput(ctx, []byte(out+"\n"), "patch-id", "--stable")
 	if err != nil {
 		return nil, err
 	}
+	return parsePatchIDs(out), nil
+}
+
+// hunkHeader matches a hunk header; a missing count is 1.
+var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@`)
+
+// parsePatchIDs reads git log -p output, each commit introduced by a
+// "commit <oid>" line, into an id per commit. Each file's diff is hashed on
+// its own: its diff --git line, mode lines and changed lines with all
+// whitespace removed, or a binary file's blob ids, while hunk positions and
+// the blob ids of text files, which a rebase changes, are left out. The
+// commit's id hashes its files' hashes in sorted order, so their order does
+// not matter. A commit with no file diff has no id.
+func parsePatchIDs(log string) map[string]string {
 	ids := map[string]string{}
-	for _, l := range strings.Split(out, "\n") {
-		if id, oid, ok := strings.Cut(l, " "); ok {
-			ids[oid] = id
+	var commit, index string
+	var files []string
+	var file hash.Hash
+	before, after := 0, 0 // lines left in the current hunk
+	endFile := func() {
+		if file != nil {
+			files = append(files, hex.EncodeToString(file.Sum(nil)))
+			file = nil
 		}
 	}
-	return ids, nil
+	endCommit := func() {
+		endFile()
+		if commit != "" && len(files) > 0 {
+			slices.Sort(files)
+			sum := sha256.Sum256([]byte(strings.Join(files, "\n")))
+			ids[commit] = hex.EncodeToString(sum[:])
+		}
+		commit, files = "", nil
+	}
+	write := func(l string) {
+		file.Write([]byte(strings.Join(strings.Fields(l), "")))
+		file.Write([]byte{'\n'})
+	}
+	for _, l := range strings.Split(log, "\n") {
+		if before > 0 || after > 0 {
+			switch {
+			case strings.HasPrefix(l, "-"):
+				before--
+			case strings.HasPrefix(l, "+"):
+				after--
+			case strings.HasPrefix(l, " "):
+				before, after = before-1, after-1
+			}
+			if strings.HasPrefix(l, "-") || strings.HasPrefix(l, "+") {
+				write(l)
+			}
+			continue
+		}
+		switch {
+		case strings.HasPrefix(l, "commit "):
+			endCommit()
+			commit = strings.TrimPrefix(l, "commit ")
+		case strings.HasPrefix(l, "diff --git "):
+			endFile()
+			if commit != "" {
+				file, index = sha256.New(), ""
+				write(l)
+			}
+		case file == nil:
+		case strings.HasPrefix(l, "@@ "):
+			if m := hunkHeader.FindStringSubmatch(l); m != nil {
+				before, after = hunkCount(m[1]), hunkCount(m[2])
+			}
+		case strings.HasPrefix(l, "index "):
+			index = l
+		case strings.HasPrefix(l, "Binary files "):
+			write(index)
+		case strings.HasPrefix(l, "old mode "), strings.HasPrefix(l, "new mode "),
+			strings.HasPrefix(l, "new file mode "), strings.HasPrefix(l, "deleted file mode "):
+			write(l)
+		}
+	}
+	endCommit()
+	return ids
+}
+
+func hunkCount(s string) int {
+	if s == "" {
+		return 1
+	}
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 // rewrittenSince reports whether branch was rewritten in place (amended,

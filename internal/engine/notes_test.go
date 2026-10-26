@@ -322,3 +322,93 @@ func TestOnlyRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePatchIDs(t *testing.T) {
+	// Two commits making the same change, at other positions and on other
+	// blobs (a rebase onto a main that inserted a line between its hunks),
+	// in one-line hunks whose headers carry no count.
+	same := `commit aaaa
+diff --git a/default.go b/default.go
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/default.go
++++ b/default.go
+@@ -8 +8 @@ func Default() {
+-	path := "gitlet.toml"
++	path := "settings.toml"
+@@ -30 +30 @@ func Other() {
+-	-- old comment
++	-- new comment
+commit bbbb
+diff --git a/default.go b/default.go
+index 3333333333333333333333333333333333333333..4444444444444444444444444444444444444444 100644
+--- a/default.go
++++ b/default.go
+@@ -8 +8 @@
+-	path :=  "gitlet.toml"
++	path := "settings.toml"
+@@ -31 +31 @@
+-	-- old comment
++	-- new comment
+`
+	// A change to two files, listed in the other order, is the same change.
+	files := `commit cccc
+diff --git a/a.go b/a.go
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/a.go
++++ b/a.go
+@@ -1,0 +2,2 @@
++x
++y
+diff --git a/b.go b/b.go
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/b.go
++++ b/b.go
+@@ -3 +2,0 @@
+-z
+commit dddd
+diff --git a/b.go b/b.go
+index 5555555555555555555555555555555555555555..6666666666666666666666666666666666666666 100644
+--- a/b.go
++++ b/b.go
+@@ -9 +8,0 @@
+-z
+diff --git a/a.go b/a.go
+index 5555555555555555555555555555555555555555..6666666666666666666666666666666666666666 100644
+--- a/a.go
++++ b/a.go
+@@ -5,0 +6,2 @@
++x
++y
+`
+	// Binary changes to one path differ by their blobs; an empty commit
+	// has no id.
+	binary := `commit eeee
+diff --git a/logo.png b/logo.png
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+Binary files a/logo.png and b/logo.png differ
+commit ffff
+diff --git a/logo.png b/logo.png
+index 2222222222222222222222222222222222222222..7777777777777777777777777777777777777777 100644
+Binary files a/logo.png and b/logo.png differ
+commit 0000
+`
+	ids := parsePatchIDs(same + files + binary)
+	if ids["aaaa"] == "" || ids["aaaa"] != ids["bbbb"] {
+		t.Errorf("a rebased commit changed its id: %q vs %q", ids["aaaa"], ids["bbbb"])
+	}
+	if ids["cccc"] == "" || ids["cccc"] != ids["dddd"] {
+		t.Errorf("file order changed the id: %q vs %q", ids["cccc"], ids["dddd"])
+	}
+	if ids["eeee"] == "" || ids["eeee"] == ids["ffff"] {
+		t.Errorf("two binary changes to one path share an id: %q vs %q", ids["eeee"], ids["ffff"])
+	}
+	if ids["aaaa"] == ids["cccc"] {
+		t.Error("different changes share an id")
+	}
+	if _, ok := ids["0000"]; ok {
+		t.Error("an empty commit has an id")
+	}
+	if len(ids) != 6 {
+		t.Errorf("ids = %v, want six", ids)
+	}
+}
