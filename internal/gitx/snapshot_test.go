@@ -374,6 +374,24 @@ func TestPushExcluded(t *testing.T) {
 	f.git("push", "-q", "origin", "main")
 	check("after the push", published, 1024)
 
+	// Every path an unpushed commit holds a new blob at counts, not only
+	// the one the walk met it at first: a denied file renamed later, a
+	// copy under an allowed name in the same commit, and a file only a
+	// merge adds.
+	f.commitFiles("add a key", map[string]string{"server.pem": "-----BEGIN PRIVATE KEY-----\n"})
+	f.git("mv", "server.pem", "server.pem.bak")
+	f.commit("rename the key")
+	check("renamed in a later commit", published, 1024, "server.pem")
+	f.commitFiles("copy", map[string]string{"app/creds.txt": "SECRET=2\n", "config/.env": "SECRET=2\n"})
+	check("copied in one commit", published, 1024, "config/.env", "server.pem")
+	f.git("push", "-q", "origin", "main")
+	f.git("switch", "-q", "-c", "side", "HEAD~1")
+	f.commitFiles("side", map[string]string{"side.txt": "side\n"})
+	f.git("switch", "-q", "main")
+	f.git("merge", "-q", "--no-commit", "side")
+	f.commitFiles("merge", map[string]string{"merged.key": "k2\n"})
+	check("added by a merge", published, 1024, "merged.key")
+
 	head := f.git("rev-parse", "HEAD")
 	for _, bad := range []struct {
 		commit    string

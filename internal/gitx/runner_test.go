@@ -349,6 +349,20 @@ func TestSubcommand(t *testing.T) {
 	}
 }
 
+func TestSplitWriter(t *testing.T) {
+	t.Parallel()
+	var got []string
+	w := &splitWriter{sep: 0, fn: func(field string) { got = append(got, field) }}
+	for _, chunk := range []string{"a", "b\x00\x00c", "d\x00e"} {
+		if n, err := w.Write([]byte(chunk)); err != nil || n != len(chunk) {
+			t.Fatalf("Write(%q) = %d, %v", chunk, n, err)
+		}
+	}
+	if want := []string{"ab", "", "cd"}; !slices.Equal(got, want) {
+		t.Fatalf("fields = %q, want %q (a field split across writes kept whole, the unterminated last one dropped)", got, want)
+	}
+}
+
 func TestRepoWithoutOpen(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

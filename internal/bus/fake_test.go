@@ -507,8 +507,9 @@ func (r *fakeRepo) Push(ctx context.Context, opt gitx.PushOptions) (gitx.PushRep
 	return rep, nil
 }
 
-// PushExcluded walks the fake store the way the real one lists objects for
-// a push: what commit reaches and no ref matching published reaches.
+// PushExcluded walks the fake store the way the real one checks a push:
+// every path at which something commit reaches, and no ref matching
+// published reaches, holds a blob no such ref reaches.
 func (r *fakeRepo) PushExcluded(ctx context.Context, commit string, published []string, maxSize int64) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -526,35 +527,55 @@ func (r *fakeRepo) PushExcluded(ctx context.Context, commit string, published []
 		}
 	}
 	r.mu.Unlock()
-	seen := map[string]bool{}
-	found := map[string]bool{}
-	var walk func(oid, p string, report bool)
-	walk = func(oid, p string, report bool) {
+	have := map[string]bool{} // what the tips reach
+	var reach func(oid string)
+	reach = func(oid string) {
 		o := r.store.get(oid)
-		if seen[oid] || o == nil {
+		if have[oid] || o == nil {
 			return
 		}
-		seen[oid] = true
+		have[oid] = true
 		switch o.kind {
 		case "commit":
-			walk(o.tree, "", report)
+			reach(o.tree)
 			for _, parent := range o.parents {
-				walk(parent, "", report)
+				reach(parent)
 			}
 		case "tree":
 			for _, e := range o.entries {
-				walk(e.OID, path.Join(p, e.Name), report)
-			}
-		case "blob":
-			if report && (gitx.IsDenied(p) || maxSize > 0 && int64(len(o.data)) > maxSize) {
-				found[p] = true
+				reach(e.OID)
 			}
 		}
 	}
 	for _, tip := range tips {
-		walk(tip, "", false)
+		reach(tip)
 	}
-	walk(commit, "", true)
+	seen := map[string]bool{} // by oid and path: an object can sit at several paths
+	found := map[string]bool{}
+	var walk func(oid, p string)
+	walk = func(oid, p string) {
+		o := r.store.get(oid)
+		if have[oid] || seen[oid+" "+p] || o == nil {
+			return
+		}
+		seen[oid+" "+p] = true
+		switch o.kind {
+		case "commit":
+			walk(o.tree, "")
+			for _, parent := range o.parents {
+				walk(parent, "")
+			}
+		case "tree":
+			for _, e := range o.entries {
+				walk(e.OID, path.Join(p, e.Name))
+			}
+		case "blob":
+			if gitx.IsDenied(p) || maxSize > 0 && int64(len(o.data)) > maxSize {
+				found[p] = true
+			}
+		}
+	}
+	walk(commit, "")
 	return slices.Sorted(maps.Keys(found)), nil
 }
 

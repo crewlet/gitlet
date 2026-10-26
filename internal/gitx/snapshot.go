@@ -408,37 +408,65 @@ func (r *Repo) pushExcluded(ctx context.Context, commit string, published []stri
 			revs = append(revs, "^"+oid)
 		}
 	}
-	// The tips go through stdin: a clone can track many refs.
-	out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(revs, "\n") + "\n")}, "rev-list", "--objects", "--stdin")
+	// The tips go through stdin: a clone can track many refs. Commits are
+	// listed as "<oid>", trees and blobs as "<oid> <path>", with only the
+	// first path the walk met the object at.
+	var commits, objects []string
+	list := &splitWriter{sep: '\n', fn: func(l string) {
+		if oid, _, ok := strings.Cut(l, " "); ok {
+			objects = append(objects, oid)
+		} else if l != "" {
+			commits = append(commits, l)
+		}
+	}}
+	_, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(revs, "\n") + "\n"), stdout: list}, "rev-list", "--objects", "--stdin")
 	if err != nil {
 		return nil, mapNotFound(err, commit)
 	}
-	// Commits are listed as "<oid>", trees and blobs as "<oid> <path>": the
-	// path at which the walk first met the object, cut at a newline. Not
-	// lines(), which would also cut a trailing "\r" from the path.
-	var oids, paths []string
-	for _, l := range strings.Split(string(out), "\n") {
-		if oid, p, ok := strings.Cut(l, " "); ok && p != "" {
-			oids, paths = append(oids, oid), append(paths, p)
-		}
-	}
-	if len(oids) == 0 {
+	if len(commits) == 0 || len(objects) == 0 {
 		return nil, nil
 	}
-	out, err = r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(oids, "\n") + "\n")}, "cat-file", "--batch-check")
+	out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(objects, "\n") + "\n")}, "cat-file", "--batch-check")
 	if err != nil {
 		return nil, err
 	}
+	blobs := map[string]int64{} // the blobs the push would send, by oid, with their sizes
+	for _, l := range lines(string(out)) {
+		if f := strings.Fields(l); len(f) == 3 && f[1] == "blob" { // <oid> <type> <size>
+			blobs[f[0]], _ = strconv.ParseInt(f[2], 10, 64)
+		}
+	}
+	if len(blobs) == 0 {
+		return nil, nil
+	}
+	// A blob can sit at several paths (renamed in a later commit, copied
+	// under another name), so each new blob is checked at every path the
+	// commits hold it at. Following the parents that hold it at a path
+	// ends at a commit, never one the remote has, whose parents do not,
+	// so diffing every commit against each parent (-m) and a root against
+	// nothing (--root) meets every such path. diff-tree is plumbing, so
+	// the user's diff settings do not change its output, which is read as
+	// it comes: a long history can change many paths.
 	found := map[string]bool{}
-	for i, l := range lines(string(out)) {
-		f := strings.Fields(l) // <oid> <type> <size>, in input order
-		if i >= len(paths) || len(f) != 3 || f[1] != "blob" {
-			continue
+	var meta string
+	diff := &splitWriter{sep: 0, fn: func(field string) {
+		if meta == "" {
+			meta = field // :<old mode> <new mode> <old oid> <new oid> <status>
+			return
 		}
-		size, err := strconv.ParseInt(f[2], 10, 64)
-		if isDenied(paths[i]) || (maxSize > 0 && err == nil && size > maxSize) {
-			found[paths[i]] = true
+		f := strings.Fields(meta)
+		meta = ""
+		if len(f) != 5 {
+			return
 		}
+		if size, ok := blobs[f[3]]; ok && (isDenied(field) || maxSize > 0 && size > maxSize) {
+			found[field] = true
+		}
+	}}
+	_, err = r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(commits, "\n") + "\n"), stdout: diff},
+		"diff-tree", "--stdin", "-r", "-m", "--root", "--no-renames", "--no-commit-id", "-z", "--diff-filter=AMT")
+	if err != nil {
+		return nil, err
 	}
 	return slices.Sorted(maps.Keys(found)), nil
 }

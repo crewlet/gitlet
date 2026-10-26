@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -79,6 +80,7 @@ func (r *Repo) environ(extra []string) []string {
 // cmdOpts controls one git invocation.
 type cmdOpts struct {
 	stdin   []byte        // nil reads from the null device
+	stdout  io.Writer     // receives stdout as it comes; nil returns it whole
 	env     []string      // extra KEY=value pairs, overriding the base environment
 	timeout time.Duration // 0 means timeoutLocal
 	// detached runs the command even after ctx is cancelled, bounded only by
@@ -134,6 +136,9 @@ func (r *Repo) execFull(ctx context.Context, o cmdOpts, args ...string) (stdout,
 		cmd.Stdin = bytes.NewReader(o.stdin)
 	}
 	cmd.Stdout = &out
+	if o.stdout != nil {
+		cmd.Stdout = o.stdout
+	}
 	cmd.Stderr = errBuf
 	stopped := supervise(cmd)
 
@@ -387,6 +392,29 @@ func splitNUL(b []byte) []string {
 		return nil
 	}
 	return strings.Split(s, "\x00")
+}
+
+// splitWriter hands each sep-terminated field written to it to fn, for
+// output too long to hold whole (cmdOpts.stdout). An unterminated last
+// field is dropped.
+type splitWriter struct {
+	sep     byte
+	fn      func(field string)
+	partial []byte
+}
+
+func (w *splitWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	for {
+		i := bytes.IndexByte(p, w.sep)
+		if i < 0 {
+			w.partial = append(w.partial, p...)
+			return n, nil
+		}
+		w.partial = append(w.partial, p[:i]...)
+		w.fn(string(w.partial))
+		w.partial, p = w.partial[:0], p[i+1:]
+	}
 }
 
 // lines splits newline-separated output, dropping empty lines.
