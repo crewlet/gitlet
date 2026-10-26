@@ -199,6 +199,17 @@ func (b *builder) Add(d Def) model.Symbol {
 
 // Ref records a reference at node n. Empty names are ignored.
 func (b *builder) Ref(name, qualifier string, kind model.RefKind, n *sitter.Node) {
+	b.ref(name, qualifier, kind, false, n)
+}
+
+// MethodCall records a call of the method name on the value that receiver
+// renders, for a language whose syntax tells a receiver apart from a path
+// (model.Ref.Receiver).
+func (b *builder) MethodCall(name, receiver string, n *sitter.Node) {
+	b.ref(name, receiver, model.RefCall, true, n)
+}
+
+func (b *builder) ref(name, qualifier string, kind model.RefKind, receiver bool, n *sitter.Node) {
 	if name == "" {
 		return
 	}
@@ -209,6 +220,7 @@ func (b *builder) Ref(name, qualifier string, kind model.RefKind, n *sitter.Node
 		Lang:      b.lang,
 		Path:      b.path,
 		Line:      Line(n),
+		Receiver:  receiver,
 	})
 }
 

@@ -689,7 +689,9 @@ func rsIsAny(n *sitter.Node, nodes []*sitter.Node) bool {
 }
 
 // rsCall records a call: f(), a::b::f(), Type::new(), x.f(), f::<T>().
-// Self::f() inside an impl is qualified with the impl's type.
+// Self::f() inside an impl is qualified with the impl's type. A method
+// call x.f() is recorded on a receiver, which keeps it apart from the path
+// x::f() although both have the qualifier "x".
 func rsCall(b *builder, n *sitter.Node, s rsScope) {
 	fn := Field(n, "function")
 	if fn != nil && fn.Kind() == "generic_function" {
@@ -706,7 +708,7 @@ func rsCall(b *builder, n *sitter.Node, s rsScope) {
 		b.Ref(b.Text(name), rsSelfPath(rsPath(b, Field(fn, "path")), s), model.RefCall, name)
 	case "field_expression":
 		if field := Field(fn, "field"); field != nil && field.Kind() == "field_identifier" {
-			b.Ref(b.Text(field), rsReceiver(b, Field(fn, "value"), rsReceiverDepth), model.RefCall, field)
+			b.MethodCall(b.Text(field), rsReceiver(b, Field(fn, "value"), rsReceiverDepth), field)
 		}
 	}
 }
@@ -872,8 +874,9 @@ func rsBuiltinType(name string) bool {
 // arguments tree-sitter leaves as unparsed tokens: an identifier directly
 // followed by a parenthesized group, as in assert_eq!(parse(x), y) or
 // vec![a::b(), x.c()]. The qualifier is the `::` path or the `.` receiver
-// in front of it. This finds most calls in format!, assert! and vec!
-// arguments; struct literals and types inside macros are not recorded.
+// in front of it, kept apart as rsCall does. This finds most calls in
+// format!, assert! and vec! arguments; struct literals and types inside
+// macros are not recorded.
 func rsMacroRefs(b *builder, tt *sitter.Node, s rsScope) {
 	if tt == nil {
 		return
@@ -892,7 +895,12 @@ func rsMacroRefs(b *builder, tt *sitter.Node, s rsScope) {
 		if c.Kind() != "identifier" || i+1 >= len(toks) || !rsParenGroup(toks[i+1]) || rsKeywords[b.Text(c)] {
 			continue
 		}
-		if q, ok := rsMacroQualifier(b, toks[:i]); ok {
+		q, ok := rsMacroQualifier(b, toks[:i])
+		switch {
+		case !ok:
+		case i > 0 && toks[i-1].Kind() == ".":
+			b.MethodCall(b.Text(c), q, c)
+		default:
 			b.Ref(b.Text(c), rsSelfPath(q, s), model.RefCall, c)
 		}
 	}

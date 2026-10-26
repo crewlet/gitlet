@@ -17,6 +17,7 @@ type resolveCase struct {
 	types    []string // top-level types the file defines
 	inline   []string // containers of functions in inline Rust modules ("outer.inner")
 	kind     model.RefKind
+	receiver bool // the qualifier is a method call's receiver (model.Ref.Receiver)
 	goModule GoModule
 	want     string // "name module" ("Container.name module"), "name ?" when unresolved, "" when dropped
 }
@@ -71,7 +72,7 @@ func runResolveCases(t *testing.T, tests []resolveCase) {
 				kind = model.RefCall
 			}
 			q, name := splitRef(tt.ref)
-			ref := model.Ref{Name: name, Qualifier: q, Kind: kind, Lang: lang, Path: tt.path, Line: 3}
+			ref := model.Ref{Name: name, Qualifier: q, Kind: kind, Lang: lang, Path: tt.path, Line: 3, Receiver: tt.receiver}
 			out := Resolve(f, []model.Ref{ref}, tt.goModule)
 			got := ""
 			if len(out) == 1 {
@@ -86,7 +87,7 @@ func runResolveCases(t *testing.T, tests []resolveCase) {
 				default:
 					got = r.Name + " ?"
 				}
-				if r.Line != 3 || r.Path != tt.path || r.Qualifier != q || r.Kind != kind {
+				if r.Line != 3 || r.Path != tt.path || r.Qualifier != q || r.Kind != kind || r.Receiver {
 					t.Errorf("ref fields changed: %+v", r)
 				}
 			} else if len(out) > 1 {
@@ -242,9 +243,13 @@ func TestResolveRust(t *testing.T) {
 		{name: "child module declared with mod", path: file, ref: "retry::run", imports: []symbols.Import{ns("retry", "self::retry")}, want: "run src/net/client/retry"},
 		{name: "module declared in the crate root", path: "src/main.rs", ref: "config::load", imports: []symbols.Import{ns("config", "self::config")}, want: "load src/config"},
 		{name: "undeclared one-segment call is unresolved", path: file, ref: "retry::run", want: "run ?"},
-		{name: "method call on a value", path: file, ref: "c.send", want: "send ?"},
-		{name: "underscore receiver", path: file, ref: "_.send", want: "send ?"},
-		{name: "receiver with try", path: file, ref: "load()?.send", want: "send ?"},
+		{name: "method call on a value", path: file, ref: "c.send", receiver: true, want: "send ?"},
+		{name: "method call on a value named like a module", path: file, ref: "retry.run", receiver: true, imports: []symbols.Import{ns("retry", "self::retry")}, want: "run ?"},
+		{name: "method call on a value named like an import", path: file, ref: "config.load", receiver: true, imports: []symbols.Import{ns("config", "crate::config")}, want: "load ?"},
+		{name: "method call on a value named like a type", path: file, ref: "Client.send", receiver: true, types: []string{"Client"}, want: "send ?"},
+		{name: "method call on a path", path: file, ref: "config::DEFAULT.load", receiver: true, imports: []symbols.Import{ns("config", "crate::config")}, want: "load ?"},
+		{name: "underscore receiver", path: file, ref: "_.send", receiver: true, want: "send ?"},
+		{name: "receiver with try", path: file, ref: "load()?.send", receiver: true, want: "send ?"},
 		{name: "inline module call", path: file, ref: "inner::f", inline: []string{"inner"}, want: "inner.f src/net/client"},
 		{name: "inline module through self", path: file, ref: "self::inner::f", inline: []string{"inner"}, want: "inner.f src/net/client"},
 		{name: "nested inline module", path: file, ref: "self::outer::inner::f", inline: []string{"outer.inner", "outer.Config"}, want: "outer.inner.f src/net/client"},
@@ -259,8 +264,8 @@ func TestResolveRust(t *testing.T) {
 		{name: "extern crate path dropped", path: file, ref: "::serde::to_string"},
 		{name: "prelude type dropped", path: file, ref: "Vec::new"},
 		{name: "unknown type is unresolved", path: file, ref: "Foo::bar", want: "bar ?"},
-		{name: "self receiver is unresolved", path: file, ref: "self.send", want: "send ?"},
-		{name: "field chain is unresolved", path: file, ref: "self.client.send", want: "send ?"},
+		{name: "self receiver is unresolved", path: file, ref: "self.send", receiver: true, want: "send ?"},
+		{name: "field chain is unresolved", path: file, ref: "self.client.send", receiver: true, want: "send ?"},
 		{name: "glob import binds nothing", path: file, ref: "load", imports: []symbols.Import{glob("crate::config")}, want: "load src/net/client"},
 	})
 }

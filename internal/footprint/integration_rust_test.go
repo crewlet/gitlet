@@ -95,9 +95,9 @@ func TestIntegrationRustModules(t *testing.T) {
 	)
 	checkLines(t, "refs", summarizeRefs(res.Footprint.Refs), []string{
 		"src/main.rs:5 config.load src/config",
-		// A variable named like the module reads as the module; Go, Python
-		// and JavaScript resolve qualifiers named like an import the same way.
-		"src/main.rs:7 config.max src/config",
+		// Rust keeps values and modules apart: a method call's receiver is a
+		// value even when a module has its name.
+		"src/main.rs:7 config.max ?",
 		"src/net/client.rs:4 retry.with_backoff src/net/client/retry",
 		"src/net/client.rs:5 serde_json.to_string ?", // another crate
 	})

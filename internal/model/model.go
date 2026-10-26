@@ -191,6 +191,12 @@ type Ref struct {
 	// Config::new or a Go method expression) or a Rust inline module. It is
 	// "" when the qualifier names the module itself, or there is none.
 	Container string `json:"container,omitempty"`
+
+	// Receiver is set by an extractor when the qualifier is the value a
+	// method is called on and the language tells it apart from a path, as
+	// Rust does for x.f() and x::f(). The footprint package leaves such a
+	// ref unresolved and clears the flag, so it is never stored.
+	Receiver bool `json:"-"`
 }
 
 // Footprint is what a work item changes, at file and symbol level.

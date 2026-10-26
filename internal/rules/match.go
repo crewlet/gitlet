@@ -28,7 +28,10 @@ const containerVersion = 2
 // module, for packages below the repository root (a source root in a
 // subdirectory, a GOPATH-style tree). An
 // unresolved ref (its qualifier is a variable, receiver, self or this)
-// matches a member (method, field) by name only, when that name is unique.
+// matches a member (method, field) by name only, when that name is unique,
+// and so does a ref through the symbol's own module that misses a type
+// member only for want of a container: its qualifier may be a variable
+// named like the module.
 // In Go the symbol must be exported unless the ref is in its package. A
 // resolved ref that builds an instance of a class also matches the class's
 // constructor (constructed).
@@ -59,6 +62,12 @@ func matchRef(ref model.Ref, version int, sym model.Symbol, uniqueMethod bool) (
 			return false, false
 		}
 	} else if typeMember(sym) && version >= containerVersion {
+		// A module holds no methods, so a qualifier that names the
+		// symbol's own module is most likely a variable named like it
+		// (store := store.New(); store.Get()): match as unresolved.
+		if ref.Qualifier != "" && moduleMatch(ref.Module, sym) {
+			return uniqueMethod, false
+		}
 		return false, false
 	}
 	ok := moduleMatch(ref.Module, sym)

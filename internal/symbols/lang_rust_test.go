@@ -581,7 +581,7 @@ func TestRustRefs(t *testing.T) {
 func TestRustRefForms(t *testing.T) {
 	tests := []struct {
 		name, src string
-		want      []model.Ref // Name, Qualifier and Kind
+		want      []model.Ref // Name, Qualifier, Kind and Receiver
 	}{
 		{"call", "fn f() { g(); }", []model.Ref{{Name: "g", Kind: model.RefCall}}},
 		{"path call", "fn f() { a::b::g(); }", []model.Ref{{Name: "g", Qualifier: "a::b", Kind: model.RefCall}}},
@@ -597,22 +597,30 @@ func TestRustRefForms(t *testing.T) {
 		}},
 		{"method call", "fn f(x: X) { x.go(); }", []model.Ref{
 			{Name: "X", Kind: model.RefType},
-			{Name: "go", Qualifier: "x", Kind: model.RefCall},
+			{Name: "go", Qualifier: "x", Kind: model.RefCall, Receiver: true},
 		}},
 		{"self method", "impl S { fn f(&self) { self.go(); } }", []model.Ref{
 			{Name: "S", Kind: model.RefType},
-			{Name: "go", Qualifier: "self", Kind: model.RefCall},
+			{Name: "go", Qualifier: "self", Kind: model.RefCall, Receiver: true},
 		}},
 		{"awaited and tried receivers", "async fn f() { load().await?.run(); (a + b).abs(); }", []model.Ref{
-			{Name: "abs", Qualifier: "_", Kind: model.RefCall},
+			{Name: "abs", Qualifier: "_", Kind: model.RefCall, Receiver: true},
 			{Name: "load", Kind: model.RefCall},
-			{Name: "run", Qualifier: "load().await?", Kind: model.RefCall},
+			{Name: "run", Qualifier: "load().await?", Kind: model.RefCall, Receiver: true},
+		}},
+		{"method call on a value named like a module", "mod server; fn f() { let server = server::Server::new(); server.run(); }", []model.Ref{
+			{Name: "new", Qualifier: "server::Server", Kind: model.RefCall},
+			{Name: "run", Qualifier: "server", Kind: model.RefCall, Receiver: true},
 		}},
 		{"macro arguments", `fn f() { println!("{} {}", fmt(x), a::b(y.c())); vec![T::new()]; }`, []model.Ref{
 			{Name: "b", Qualifier: "a", Kind: model.RefCall},
-			{Name: "c", Qualifier: "y", Kind: model.RefCall},
+			{Name: "c", Qualifier: "y", Kind: model.RefCall, Receiver: true},
 			{Name: "fmt", Kind: model.RefCall},
 			{Name: "new", Qualifier: "T", Kind: model.RefCall},
+		}},
+		{"macro receivers", `fn f() { assert!(server.ok() && (a).b()); }`, []model.Ref{
+			{Name: "b", Qualifier: "_", Kind: model.RefCall, Receiver: true},
+			{Name: "ok", Qualifier: "server", Kind: model.RefCall, Receiver: true},
 		}},
 		{"no calls from keywords in macros", `fn f() { assert!(if (x) { true } else { false }); }`, nil},
 		{"no calls from definitions in macros", `mock! { fn get(&self) -> u8; struct Pt(u8); }`, nil},
@@ -666,7 +674,7 @@ func TestRustRefForms(t *testing.T) {
 			f := rsTestParse(t, tt.src)
 			var got []model.Ref
 			for _, r := range f.Refs {
-				got = append(got, model.Ref{Name: r.Name, Qualifier: r.Qualifier, Kind: r.Kind})
+				got = append(got, model.Ref{Name: r.Name, Qualifier: r.Qualifier, Kind: r.Kind, Receiver: r.Receiver})
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("refs:\n got %+v\nwant %+v", got, tt.want)

@@ -732,7 +732,10 @@ A ref resolves to a module as follows:
 | Rust | a `use path::name`: that path, with `crate` meaning the nearest `src` directory; otherwise the file itself | `q::name`: `q` expanded through `use`, or a child module declared with `mod q;`, and resolved the same way |
 
 A ref whose qualifier is a variable, receiver, `self` or `this` is
-**unresolved**. It matches a method by name only when that method name is
+**unresolved**. Rust keeps values apart from modules and types, so the
+receiver `q` of a method call `q.name()` is a value even when an import or
+`mod q;` binds `q`; only the path `q::name` goes through them. An
+unresolved ref matches a method by name only when that method name is
 unique among all changed symbols in the footprints in view. Unresolved
 matches produce `info` notes, never `act`, and never trigger an automatic
 claim. Imports of packages outside the repository resolve to nothing and are
@@ -757,7 +760,11 @@ names a type (`Config.load`, `Config::new`, the Go method expression
 `Store.Get`) or a Rust inline module reaches only what that type or module
 of the same name holds. Any other resolved ref, unqualified or through a
 module or package, reaches only symbols that are not members of a type:
-not methods, Python class members, or Rust `impl` and trait items. A
+not methods, Python class members, or Rust `impl` and trait items. Since a
+module holds no methods, a qualified ref through the module of a type
+member is most likely made on a variable named like the module, which Go,
+Python and JavaScript do not tell apart (`store := store.New();
+store.Get()`), so it matches that member as an unresolved ref would. A
 JavaScript named or default import used as a qualifier names a class when
 it is capitalized, and otherwise an exported object, whose members are
 taken for the module's own functions. The refs of a footprint older than

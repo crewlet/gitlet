@@ -21,7 +21,9 @@ import (
 //     global or Python builtin the file does not define) is dropped;
 //   - a ref whose qualifier is a variable, receiver, self, this or super, or
 //     any expression that is not an import or a type of this file, is kept
-//     with Resolved false and no module;
+//     with Resolved false and no module, and so is a ref the extractor
+//     marked as made on a receiver (Ref.Receiver), whatever its qualifier
+//     is named like;
 //   - every other ref gets the module it most likely names, in the form
 //     model.ModulesOf uses, and the type its qualifier names in that module
 //     as Container (a class, a Go method expression's type, a Rust type or
@@ -57,6 +59,7 @@ func resolve(f *symbols.File, refs []model.Ref, goModule GoModule) []model.Ref {
 			keep = true // unknown language: leave it unresolved
 		}
 		if keep {
+			ref.Receiver = false // Resolved says what it decided
 			out = append(out, ref)
 		}
 	}
@@ -528,10 +531,12 @@ func (r *resolver) rustRef(ref model.Ref) (model.Ref, bool) {
 		return r.rustPath(ref, strings.Split(im.Module, "::"))
 	}
 	// Receivers ("self", "self.store", "a.b()", "x?", "_") and a Self the
-	// extractor could not replace with the impl's type are values.
+	// extractor could not replace with the impl's type are values. Rust
+	// keeps values apart from modules and types, so the receiver x of
+	// x.f() is a value even when an import or `mod x;` binds x.
 	q := ref.Qualifier
 	segs := strings.Split(strings.TrimPrefix(q, "::"), "::")
-	if !rustPathRe.MatchString(q) || q == "self" || q == "Self" || slices.Contains(segs, "_") {
+	if ref.Receiver || !rustPathRe.MatchString(q) || q == "self" || q == "Self" || slices.Contains(segs, "_") {
 		return unresolved(ref)
 	}
 	if strings.HasPrefix(q, "::") {
@@ -553,9 +558,9 @@ func (r *resolver) rustRef(ref model.Ref) (model.Ref, bool) {
 	case upperFirst(head):
 		return unresolved(ref) // a type from a glob import or another crate
 	case len(segs) == 1 && ref.Kind == model.RefCall && !rustPathKeyword[head] && !r.rustInline[head]:
-		// x.f() and x::f() both arrive as qualifier "x". A child module is
-		// bound by its `mod x;` declaration above, so what is left is a
-		// method call on a value, or a call into another crate.
+		// A child module is bound by its `mod x;` declaration above, so
+		// what is left of x::f() is a call into another crate, or a method
+		// call x.f() on a value that came without Receiver.
 		return unresolved(ref)
 	}
 	return r.rustPath(ref, segs)
