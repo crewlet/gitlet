@@ -30,6 +30,12 @@ var ErrNotFound = errors.New("not found")
 // progress.
 var ErrBusy = errors.New("another git operation is in progress")
 
+// ErrTimeout marks a git command stopped by gitx's own timeout (15 s for a
+// fetch, 60 s for a push, and so on) rather than by the caller's context.
+// Such an error also matches context.DeadlineExceeded; one stopped by the
+// caller's deadline or cancellation matches only the context's error.
+var ErrTimeout = errors.New("git took longer than gitx allows")
+
 // Error is a failed git invocation.
 type Error struct {
 	Args     []string

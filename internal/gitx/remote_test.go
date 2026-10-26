@@ -1,12 +1,14 @@
 package gitx
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // remoteFixture is a bare remote with two clones, a and b, acting as two
@@ -214,6 +216,41 @@ func TestPushBatchAndRejections(t *testing.T) {
 	}
 	if rep, err := a.repo.Push(bg, PushOptions{Remote: "origin"}); err != nil || len(rep.Results) != 0 {
 		t.Errorf("empty Push = %+v, %v", rep, err)
+	}
+}
+
+// TestPushTimeouts tells a push cut off by the caller's deadline (a budget,
+// not a sign the remote is gone) from one stopped by gitx's own timeout.
+func TestPushTimeouts(t *testing.T) {
+	t.Parallel()
+	rf := newRemoteFixture(t)
+	a := rf.a
+	hook := "#!/bin/sh\ncat >/dev/null\nsleep 5\n"
+	if err := os.WriteFile(filepath.Join(rf.bare, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	push := func(ctx context.Context, timeout time.Duration, dst string) error {
+		_, err := a.repo.Push(ctx, PushOptions{Remote: "origin", Metadata: true, Timeout: timeout,
+			Updates: []PushUpdate{{Src: a.metaCommit(dst), Dst: dst, Expect: ExpectAbsent}}})
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(bg, 300*time.Millisecond)
+	defer cancel()
+	err := push(ctx, 0, "refs/gitlet/claims/k1")
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrTimeout) {
+		t.Errorf("push past the caller's deadline = %v, want the caller's deadline", err)
+	}
+	if IsNetwork(err) {
+		t.Errorf("push past the caller's deadline counts as a network failure: %v", err)
+	}
+
+	err = push(bg, 300*time.Millisecond, "refs/gitlet/claims/k2")
+	if !errors.Is(err, ErrTimeout) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("push past gitx's timeout = %v, want ErrTimeout", err)
+	}
+	if !IsNetwork(err) {
+		t.Errorf("push past gitx's timeout is not a network failure: %v", err)
 	}
 }
 

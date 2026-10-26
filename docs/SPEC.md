@@ -923,7 +923,10 @@ The skill (installed by `gitlet init`) and the MCP server instructions say:
 - Timeouts: 15 s for fetch, 60 s for push, 5 s for local reads, 120 s for
   rebase and cherry-pick. Commands that change the work tree (rebase,
   cherry-pick, revert, switch) run detached from the caller's cancellation,
-  with SIGINT before kill, and are aborted and cleaned up on failure.
+  with SIGINT before kill, and are aborted and cleaned up on failure. Only a
+  fetch or push that runs into these timeouts counts as a network failure;
+  one cut short by the caller's shorter budget (a verb's or a tick's) does
+  not, since that says nothing about the remote.
 - Blobs are read through one `git cat-file --batch` process per operation.
   Symbol extraction is cached in memory by (blob oid, language).
 

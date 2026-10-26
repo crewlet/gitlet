@@ -108,8 +108,9 @@ func (r *Repo) exec(ctx context.Context, o cmdOpts, args ...string) ([]byte, err
 }
 
 // execFull runs git with args in the work tree. A non-zero exit returns an
-// *Error; a command stopped by ctx or its timeout returns an error that
-// wraps both the *Error and the context's error.
+// *Error. A command stopped by the caller's ctx returns an error that wraps
+// both the *Error and ctx's error; one stopped by its timeout wraps the
+// *Error, ErrTimeout and context.DeadlineExceeded.
 func (r *Repo) execFull(ctx context.Context, o cmdOpts, args ...string) (stdout, stderr []byte, err error) {
 	if o.detached {
 		ctx = context.WithoutCancel(ctx)
@@ -120,6 +121,7 @@ func (r *Repo) execFull(ctx context.Context, o cmdOpts, args ...string) (stdout,
 	if timeout <= 0 {
 		timeout = timeoutLocal
 	}
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -151,7 +153,12 @@ func (r *Repo) execFull(ctx context.Context, o cmdOpts, args ...string) (stdout,
 	if cerr := ctx.Err(); cerr != nil {
 		// Stopped by SIGINT/SIGKILL: the exit code says nothing about git's view.
 		e.ExitCode = -1
-		return out.Bytes(), errBuf.Bytes(), fmt.Errorf("gitx: %w: %w", e, cerr)
+		if perr := parent.Err(); perr != nil {
+			// The caller's deadline or cancellation: its budget ran out,
+			// which says nothing about the remote.
+			return out.Bytes(), errBuf.Bytes(), fmt.Errorf("gitx: %w: %w", e, perr)
+		}
+		return out.Bytes(), errBuf.Bytes(), fmt.Errorf("gitx: %w: %w after %s: %w", e, ErrTimeout, timeout, cerr)
 	}
 	return out.Bytes(), errBuf.Bytes(), e
 }
@@ -297,13 +304,15 @@ func isPermission(err error) bool {
 
 // isNetwork reports whether a failed git command could not talk to the
 // remote. Permission failures, which often share git's generic "could not
-// read from remote repository" line, are not network failures.
+// read from remote repository" line, are not network failures, and neither
+// is a command the caller's own deadline cut short: only gitx's timeout,
+// which gives the remote ample time, says the remote is not answering.
 func isNetwork(err error) bool {
 	var e *Error
 	if !errors.As(err, &e) || isPermission(err) {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, ErrTimeout) {
 		switch subcommand(e.Args) {
 		case "fetch", "push", "ls-remote", "pull", "clone":
 			return true
