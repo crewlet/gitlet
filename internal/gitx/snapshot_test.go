@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // userState is everything a snapshot must leave alone.
@@ -113,6 +114,39 @@ func TestSnapshot(t *testing.T) {
 	again, err := f.repo.Background().Snapshot(bg, SnapshotOptions{MaxFileSize: 1024, Message: "gitlet: snapshot 2"})
 	if err != nil || again.Tree != res.Tree {
 		t.Fatalf("second snapshot = %+v, %v; want tree %s", again, err, res.Tree)
+	}
+}
+
+// A file rewritten at the same size and the same modification time as the
+// real index keeps the stat data the index cached for it. git still reads
+// its content, because the index is no older than the file ("racy git"),
+// and so must a snapshot built from a copy of that index.
+func TestSnapshotRacyCleanFile(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.git("config", "core.trustctime", "false")
+	path := filepath.Join(f.dir, "a.txt")
+	mt := time.Now().Add(-time.Hour).Truncate(time.Second)
+	f.write("a.txt", "one\n")
+	if err := os.Chtimes(path, mt, mt); err != nil {
+		t.Fatal(err)
+	}
+	head := f.commit("base") // the index is written now, so the entry is not racy
+	f.write("a.txt", "two\n")
+	for _, p := range []string{path, filepath.Join(f.repo.GitDir, "index")} {
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out := f.git("--no-optional-locks", "status", "--porcelain"); !strings.Contains(out, "a.txt") {
+		t.Fatalf("setup: git status misses the change: %q", out)
+	}
+	res, err := f.repo.Snapshot(bg, SnapshotOptions{Parent: head})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.treeFiles(res.Tree)["a.txt"]; got != "two\n" {
+		t.Errorf("snapshot holds a.txt = %q, want the rewritten file", got)
 	}
 }
 

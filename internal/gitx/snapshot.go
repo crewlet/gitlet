@@ -155,8 +155,12 @@ func (s *snapper) git(stdin []byte, args ...string) (string, error) {
 }
 
 // prepareIndex copies the real index, which leaves git only the changed
-// files to hash. An unborn HEAD starts from an empty index; a missing real
-// index starts from the parent's tree.
+// files to hash. The copy keeps the real index's modification time: git
+// trusts an entry's cached stat data only when the file was last changed
+// before the index was written, and a copy dated now would make a file
+// rewritten in the same second as the real index, at the same size, look
+// unchanged ("racy git"). An unborn HEAD starts from an empty index; a
+// missing real index starts from the parent's tree.
 func (s *snapper) prepareIndex() error {
 	os.Remove(s.index)
 	if s.parent == "" {
@@ -177,12 +181,17 @@ func (s *snapper) prepareIndex() error {
 	}
 }
 
+// copyFile copies src to dst, keeping src's modification time.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	fi, err := in.Stat()
+	if err != nil {
+		return err
+	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -191,7 +200,10 @@ func copyFile(src, dst string) error {
 		out.Close()
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Chtimes(dst, fi.ModTime(), fi.ModTime())
 }
 
 // excluded reports whether a work-tree file must stay out of the snapshot,
