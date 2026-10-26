@@ -31,8 +31,10 @@ type Options struct {
 	// MaxParsed caps how many changed files are parsed; beyond it files are
 	// tracked at file level only and Truncated is reported. 0 means no cap.
 	MaxParsed int
-	// GoModule is the module path from the root go.mod; "" means Compute
-	// reads go.mod at head itself.
+	// GoModule is the module path of a go.mod at the repository root that
+	// holds every Go file. "" means Compute reads, at head, the go.mod
+	// nearest above each Go file, and finds the repository's other modules
+	// in its local replace directives and in go.work.
 	GoModule string
 	Extract  Extractor
 	Now      time.Time // ComputedAt; zero means time.Now()
@@ -74,7 +76,8 @@ func DiffMoved(old, new *symbols.File) []model.SymbolChange { return diffMoved(o
 func Classify(old, new model.Symbol) (breaking bool) { return classify(old, new) }
 
 // Resolve sets Module and Resolved on refs made in f (docs/SPEC.md,
-// section 9.6), using f's imports and the Go module path.
-func Resolve(f *symbols.File, refs []model.Ref, goModule string) []model.Ref {
+// section 9.6), using f's imports and, for Go, the modules its import paths
+// can name.
+func Resolve(f *symbols.File, refs []model.Ref, goModule GoModule) []model.Ref {
 	return resolve(f, refs, goModule)
 }

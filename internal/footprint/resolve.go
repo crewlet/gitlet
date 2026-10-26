@@ -30,7 +30,7 @@ import (
 // when they are probably third-party: nothing in one file tells them apart
 // from a package of the repository, and a module that matches no symbol is
 // harmless.
-func resolve(f *symbols.File, refs []model.Ref, goModule string) []model.Ref {
+func resolve(f *symbols.File, refs []model.Ref, goModule GoModule) []model.Ref {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -63,7 +63,7 @@ func resolve(f *symbols.File, refs []model.Ref, goModule string) []model.Ref {
 
 // resolver holds one file's imports and top-level types.
 type resolver struct {
-	goModule string
+	goModule GoModule
 	imports  []symbols.Import
 	bindings map[string]symbols.Import // by local name; later imports win
 	py       map[string]string         // Python qualifier prefixes to modules (pyBindings)
@@ -74,7 +74,7 @@ type resolver struct {
 	rustInline map[string]bool
 }
 
-func newResolver(f *symbols.File, goModule string) *resolver {
+func newResolver(f *symbols.File, goModule GoModule) *resolver {
 	r := &resolver{goModule: goModule, bindings: map[string]symbols.Import{}, types: map[string]bool{}, defined: map[string]bool{}}
 	if f == nil {
 		return r
@@ -205,23 +205,36 @@ func goPackageName(p string) string {
 }
 
 // goImportModule maps a Go import path to a package directory of the
-// repository. With a module path, imports outside the module are external.
-// Without one, paths that look like they live on a host are kept whole so
-// the matcher can compare their suffix, and others (the standard library)
-// are external.
-func goImportModule(importPath, module string) (string, bool) {
-	switch {
-	case module != "" && importPath == module:
-		return ".", true
-	case module != "":
-		rest, ok := strings.CutPrefix(importPath, module+"/")
-		return rest, ok && rest != ""
+// repository: the rest of the path after the longest module of mod it is
+// in, joined to that module's directory. When mod knows any module, imports
+// outside all of them are external. Without one, paths that look like they
+// live on a host are kept whole so the matcher can compare their suffix,
+// and others (the standard library) are external.
+func goImportModule(importPath string, mod GoModule) (string, bool) {
+	if !mod.known() {
+		first, _, _ := strings.Cut(importPath, "/")
+		if strings.Contains(first, ".") && first != "." && first != ".." {
+			return importPath, true
+		}
+		return "", false
 	}
-	first, _, _ := strings.Cut(importPath, "/")
-	if strings.Contains(first, ".") && first != "." && first != ".." {
-		return importPath, true
+	best, dir := "", ""
+	consider := func(module, moduleDir string) {
+		if module != "" && len(module) > len(best) && (importPath == module || strings.HasPrefix(importPath, module+"/")) {
+			best, dir = module, moduleDir
+		}
 	}
-	return "", false
+	consider(mod.Path, mod.Dir)
+	for module, moduleDir := range mod.Others {
+		consider(module, moduleDir) // keys are distinct, so no two tie
+	}
+	if best == "" {
+		return "", false
+	}
+	if p := path.Join(dir, strings.TrimPrefix(importPath[len(best):], "/")); p != "" {
+		return p, true
+	}
+	return ".", true
 }
 
 // TypeScript, TSX and JavaScript

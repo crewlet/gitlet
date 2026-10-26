@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 	"slices"
 	"time"
 
@@ -27,8 +28,9 @@ type computer struct {
 	base, head string
 	opt        Options
 
-	goModule     string
-	goModuleRead bool
+	// Go module lookups at head (goModuleFor), cached for the whole call.
+	goFiles   map[string]goModFile // go.mod and go.work files by path; zero when missing
+	goModules map[string]GoModule  // by directory of a Go file
 
 	parsed    int // files handed to the extractor, for MaxParsed
 	truncated bool
@@ -53,7 +55,7 @@ func compute(ctx context.Context, src Source, base, head string, opt Options) (R
 
 	c := &computer{
 		src: src, base: base, head: head, opt: opt,
-		goModule: opt.GoModule, goModuleRead: opt.GoModule != "",
+		goFiles: map[string]goModFile{}, goModules: map[string]GoModule{},
 	}
 	// Files are visited in path order so that MaxParsed always parses the
 	// same files.
@@ -218,9 +220,9 @@ func (c *computer) parse(ctx context.Context, e gitx.DiffEntry) (bool, error) {
 	if newV != nil {
 		refs := changedRefs(oldV, newV, changes)
 		if len(refs) > 0 {
-			goModule := ""
+			var goModule GoModule
 			if newV.file.Lang == "go" || symbols.LangForPath(newV.path) == "go" {
-				if goModule, err = c.goMod(ctx); err != nil {
+				if goModule, err = c.goModuleFor(ctx, newV.path); err != nil {
 					return false, err
 				}
 			}
@@ -253,20 +255,88 @@ func (c *computer) read(ctx context.Context, rev, path string) (*version, error)
 	return &version{path: path, src: src}, nil
 }
 
-// goMod returns the module path of the root go.mod at head, read once.
-func (c *computer) goMod(ctx context.Context) (string, error) {
-	if c.goModuleRead {
-		return c.goModule, nil
+// goModuleFor returns the Go modules that the imports of the file at p can
+// name: the go.mod nearest above it that declares a module, the
+// directories of its local replace directives, and the modules used by the
+// nearest go.work, whose own replace directives win. With
+// Options.GoModule set, it is the root module and nothing is read.
+func (c *computer) goModuleFor(ctx context.Context, p string) (GoModule, error) {
+	if c.opt.GoModule != "" {
+		return GoModule{Path: c.opt.GoModule, Dir: "."}, nil
 	}
-	data, err := c.src.ReadFile(ctx, c.head, "go.mod")
-	switch {
-	case err == nil:
-		c.goModule = goModulePath(data)
-	case !isNotFound(err):
-		return "", fmt.Errorf("footprint: read go.mod at %s: %w", c.head, err)
+	start := path.Dir(p)
+	if m, ok := c.goModules[start]; ok {
+		return m, nil
 	}
-	c.goModuleRead = true
-	return c.goModule, nil
+	var mod, work goModFile
+	var modDir, workDir string
+	for dir := start; ; dir = path.Dir(dir) {
+		if mod.module == "" {
+			f, err := c.goFile(ctx, path.Join(dir, "go.mod"))
+			if err != nil {
+				return GoModule{}, err
+			}
+			mod, modDir = f, dir
+		}
+		if workDir == "" {
+			f, err := c.goFile(ctx, path.Join(dir, "go.work"))
+			if err != nil {
+				return GoModule{}, err
+			}
+			if f.uses != nil || f.replaces != nil {
+				work, workDir = f, dir
+			}
+		}
+		if parent := path.Dir(dir); parent == dir {
+			break
+		}
+	}
+
+	m := GoModule{Others: map[string]string{}}
+	if mod.module != "" {
+		m.Path, m.Dir = mod.module, modDir
+	}
+	for _, use := range work.uses {
+		dir, ok := repoDir(workDir, use)
+		if !ok {
+			continue
+		}
+		f, err := c.goFile(ctx, path.Join(dir, "go.mod"))
+		if err != nil {
+			return GoModule{}, err
+		}
+		if f.module != "" {
+			m.Others[f.module] = dir
+		}
+	}
+	replace := func(rs []goReplace, base string) {
+		for _, r := range rs {
+			if dir, ok := repoDir(base, r.dir); ok {
+				m.Others[r.module] = dir
+			}
+		}
+	}
+	if mod.module != "" {
+		replace(mod.replaces, modDir)
+	}
+	replace(work.replaces, workDir)
+	c.goModules[start] = m
+	return m, nil
+}
+
+// goFile reads and parses a go.mod or go.work file at head, once per call.
+// A missing file is the zero goModFile.
+func (c *computer) goFile(ctx context.Context, p string) (goModFile, error) {
+	if f, ok := c.goFiles[p]; ok {
+		return f, nil
+	}
+	data, err := c.src.ReadFile(ctx, c.head, p)
+	if err != nil && !isNotFound(err) {
+		return goModFile{}, fmt.Errorf("footprint: read %s at %s: %w", p, c.head, err)
+	}
+	f := parseGoMod(data)
+	c.goFiles[p] = f
+	return f, nil
 }
 
 func isNotFound(err error) bool {

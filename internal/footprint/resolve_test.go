@@ -17,7 +17,7 @@ type resolveCase struct {
 	types    []string // top-level types the file defines
 	inline   []string // containers of functions in inline Rust modules ("outer.inner")
 	kind     model.RefKind
-	goModule string
+	goModule GoModule
 	want     string // "name module", "name ?" when unresolved, "" when dropped
 }
 
@@ -99,14 +99,15 @@ func runResolveCases(t *testing.T, tests []resolveCase) {
 
 func TestResolveGo(t *testing.T) {
 	const file = "internal/engine/run.go"
-	const mod = "example.com/m"
+	const modPath = "example.com/m"
+	mod := GoModule{Path: modPath}
 	model_ := ns("model", "example.com/m/internal/model")
 	runResolveCases(t, []resolveCase{
 		{name: "unqualified is the own package", path: file, ref: "run", goModule: mod, want: "run internal/engine"},
 		{name: "root package file", path: "main.go", ref: "run", goModule: mod, want: "run ."},
 		{name: "import in the module", path: file, ref: "model.Load", imports: []symbols.Import{model_}, goModule: mod, want: "Load internal/model"},
 		{name: "aliased import", path: file, ref: "md.Load", imports: []symbols.Import{ns("md", "example.com/m/internal/model")}, goModule: mod, want: "Load internal/model"},
-		{name: "module root import", path: file, ref: "m.Run", imports: []symbols.Import{ns("m", mod)}, goModule: mod, want: "Run ."},
+		{name: "module root import", path: file, ref: "m.Run", imports: []symbols.Import{ns("m", modPath)}, goModule: mod, want: "Run ."},
 		{name: "selector chain is a value", path: file, ref: "model.Default.Load", imports: []symbols.Import{model_}, goModule: mod, want: "Load ?"},
 		{name: "call result is a value", path: file, ref: "model.New().Load", imports: []symbols.Import{model_}, goModule: mod, want: "Load ?"},
 		{name: "standard library dropped", path: file, ref: "fmt.Println", imports: []symbols.Import{ns("fmt", "fmt")}, goModule: mod},
@@ -122,6 +123,24 @@ func TestResolveGo(t *testing.T) {
 		{name: "dot import binds nothing", path: file, ref: "util.F", imports: []symbols.Import{{Module: "example.com/m/util", Kind: symbols.ImportGlob}}, goModule: mod, want: "F ?"},
 		{name: "receiver is unresolved", path: file, ref: "c.Load", imports: []symbols.Import{model_}, goModule: mod, want: "Load ?"},
 		{name: "method expression on a local type", path: file, ref: "Config.Load", types: []string{"Config"}, goModule: mod, want: "Load internal/engine"},
+	})
+}
+
+// TestResolveGoModules resolves Go imports of a module in a subdirectory
+// and of the repository's other modules to repository paths.
+func TestResolveGoModules(t *testing.T) {
+	const file = "svc/cmd/app/main.go"
+	svc := GoModule{Path: "example.com/svc", Dir: "svc"}
+	repo := GoModule{Path: "example.com/svc", Dir: "svc", Others: map[string]string{"example.com/lib": "lib", "example.com/lib/tools": "tools"}}
+	runResolveCases(t, []resolveCase{
+		{name: "unqualified is the own package", path: file, ref: "run", goModule: svc, want: "run svc/cmd/app"},
+		{name: "package of a nested module", path: file, ref: "store.Open", imports: []symbols.Import{ns("store", "example.com/svc/internal/store")}, goModule: svc, want: "Open svc/internal/store"},
+		{name: "root of a nested module", path: file, ref: "svc.Run", imports: []symbols.Import{ns("svc", "example.com/svc")}, goModule: svc, want: "Run svc"},
+		{name: "module outside the repository dropped", path: file, ref: "x.F", imports: []symbols.Import{ns("x", "example.com/lib/x")}, goModule: svc},
+		{name: "other module of the repository", path: file, ref: "x.F", imports: []symbols.Import{ns("x", "example.com/lib/x")}, goModule: repo, want: "F lib/x"},
+		{name: "longest module wins", path: file, ref: "gen.Run", imports: []symbols.Import{ns("gen", "example.com/lib/tools/gen")}, goModule: repo, want: "Run tools/gen"},
+		{name: "other modules without an own one", path: file, ref: "x.F", imports: []symbols.Import{ns("x", "example.com/lib/x")}, goModule: GoModule{Others: repo.Others}, want: "F lib/x"},
+		{name: "hosted path outside every module dropped", path: file, ref: "cobra.Execute", imports: []symbols.Import{ns("cobra", "github.com/spf13/cobra")}, goModule: GoModule{Others: repo.Others}},
 	})
 }
 
@@ -236,24 +255,24 @@ func TestResolveRust(t *testing.T) {
 }
 
 func TestResolveEdges(t *testing.T) {
-	if got := Resolve(nil, nil, ""); got != nil {
+	if got := Resolve(nil, nil, GoModule{}); got != nil {
 		t.Errorf("Resolve(nil, nil) = %v", got)
 	}
 	// Refs without a language take the file's; refs in unknown languages stay
 	// unresolved.
 	f := &symbols.File{Lang: "go"}
-	out := Resolve(f, []model.Ref{{Name: "F", Path: "a/b.go", Line: 1}}, "")
+	out := Resolve(f, []model.Ref{{Name: "F", Path: "a/b.go", Line: 1}}, GoModule{})
 	if len(out) != 1 || !out[0].Resolved || out[0].Module != "a" || out[0].Lang != "go" {
 		t.Errorf("lang fallback = %+v", out)
 	}
-	out = Resolve(nil, []model.Ref{{Name: "F", Path: "a/b.c", Line: 1, Module: "stale", Resolved: true}}, "")
+	out = Resolve(nil, []model.Ref{{Name: "F", Path: "a/b.c", Line: 1, Module: "stale", Resolved: true}}, GoModule{})
 	if len(out) != 1 || out[0].Resolved || out[0].Module != "" {
 		t.Errorf("unknown language = %+v", out)
 	}
 	// Resolve leaves its input alone.
 	in := []model.Ref{{Name: "f", Lang: "python", Path: "a.py", Line: 1}}
 	before := slices.Clone(in)
-	Resolve(nil, in, "")
+	Resolve(nil, in, GoModule{})
 	if !reflect.DeepEqual(in, before) {
 		t.Errorf("input modified: %+v", in)
 	}

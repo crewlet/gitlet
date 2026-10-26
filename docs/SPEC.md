@@ -688,7 +688,7 @@ A ref resolves to a module as follows:
 
 | Language | Unqualified name | Qualified name (`q.name`) |
 |---|---|---|
-| Go | the file's own package | `q` is an import: the import path with the module path from the root `go.mod` removed |
+| Go | the file's own package | `q` is an import: the import path with the longest module path it is in replaced by that module's directory |
 | TS/JS | a named or default import: the specifier resolved against the file (relative specifiers only); otherwise the file itself | `q` is a namespace import: its specifier |
 | Python | a `from m import name`: module `m` (relative, or absolute from the repo root); otherwise the file itself | `q` is an imported module or alias |
 | Rust | a `use path::name`: that path, with `crate` meaning the nearest `src` directory; otherwise the file itself | `q::name`: `q` expanded through `use`, or a child module declared with `mod q;`, and resolved the same way |
@@ -700,11 +700,17 @@ matches produce `info` notes, never `act`, and never trigger an automatic
 claim. Imports of packages outside the repository resolve to nothing and are
 dropped.
 
+The Go modules of a file are the `go.mod` nearest above it, the modules
+`use`d by the nearest `go.work`, and the `replace` directives of both files
+that point to a directory in the repository. An import in none of them is
+outside the repository. With no `go.mod` at all, an import path that starts
+with a host name is kept whole.
+
 A ref **matches** a symbol when they are in the same language family
 (TypeScript, TSX and JavaScript form one family), the names are equal, and
 the ref's module is one of the symbol's modules. For Go, Python and Rust, a
 module that ends with `/` plus the ref's module also matches, which covers
-`src/` layouts and repositories without a root `go.mod`. In Go the symbol
+`src/` layouts and GOPATH-style trees without a `go.mod`. In Go the symbol
 must also be exported, unless the ref is in the same package. Refs to
 TypeScript path aliases and bare package specifiers are treated as external.
 

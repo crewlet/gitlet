@@ -368,6 +368,82 @@ func TestComputeGoModule(t *testing.T) {
 	}
 }
 
+// TestComputeNearestGoMod resolves Go imports against the go.mod nearest
+// above the importing file, its local replace directives and the modules of
+// a go.work workspace, so modules in subdirectories resolve to repository
+// paths.
+func TestComputeNearestGoMod(t *testing.T) {
+	const svcMod = "module example.com/svc\n\ngo 1.26\n"
+	imports := []symbols.Import{
+		{Local: "store", Module: "example.com/svc/internal/store", Kind: symbols.ImportNamespace, Line: 1},
+		{Local: "x", Module: "example.com/lib/x", Kind: symbols.ImportNamespace, Line: 1},
+		{Local: "y", Module: "example.com/shared/y", Kind: symbols.ImportNamespace, Line: 1},
+		{Local: "cobra", Module: "github.com/spf13/cobra", Kind: symbols.ImportNamespace, Line: 1},
+	}
+	refs := []model.Ref{call("Open", "store", 3), call("F", "x", 3), call("G", "y", 3), call("Execute", "cobra", 3)}
+	const (
+		store = "svc/cmd/app/main.go:3 store.Open svc/internal/store"
+		lib   = "svc/cmd/app/main.go:3 x.F lib/x"
+		share = "svc/cmd/app/main.go:3 y.G shared/y"
+	)
+	tests := []struct {
+		name  string
+		files map[string]string // at head
+		want  []string
+	}{
+		{"module in a subdirectory", map[string]string{"svc/go.mod": svcMod}, []string{store}},
+		{"nearest go.mod wins over the root one", map[string]string{"go.mod": "module example.com/root\n", "svc/go.mod": svcMod}, []string{store}},
+		{"root module covering everything", map[string]string{"go.mod": "module example.com\n"}, []string{lib, share, store}},
+		{"local replace", map[string]string{"svc/go.mod": svcMod +
+			"replace example.com/shared v1.0.0 => ../shared\nreplace example.com/lib => example.com/fork v1.2.0\n"}, []string{share, store}},
+		{"replace block", map[string]string{"svc/go.mod": svcMod + "replace (\n\t// in the repository\n\t\"example.com/shared\" => ../shared\n)\n"}, []string{share, store}},
+		{"replace outside the repository", map[string]string{"svc/go.mod": svcMod + "replace example.com/shared => ../../shared\n"}, []string{store}},
+		{"go.work", map[string]string{"go.work": "go 1.26\n\nuse (\n\t./svc\n\t./lib\n)\n", "svc/go.mod": svcMod, "lib/go.mod": "module example.com/lib\n"},
+			[]string{lib, store}},
+		{"go.work entry without a go.mod", map[string]string{"go.work": "use ./svc\nuse ./gone\n", "svc/go.mod": svcMod}, []string{store}},
+		{"no go.mod keeps hosted paths", nil, []string{
+			"svc/cmd/app/main.go:3 cobra.Execute github.com/spf13/cobra",
+			"svc/cmd/app/main.go:3 x.F example.com/lib/x",
+			"svc/cmd/app/main.go:3 y.G example.com/shared/y",
+			"svc/cmd/app/main.go:3 store.Open example.com/svc/internal/store",
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRepo(gitx.DiffEntry{Status: "A", Path: "svc/cmd/app/main.go"}, gitx.DiffEntry{Status: "A", Path: "svc/cmd/app/flags.go"})
+			r.putFile(headRev, "svc/cmd/app/main.go", "package main\n\nfunc main() {}\n",
+				[]def{{q: "main", kind: "function", sig: "func main()", body: "m", start: 3, end: 3}}, refs, imports...)
+			r.putFile(headRev, "svc/cmd/app/flags.go", "package main\n\nfunc flags() {}\n",
+				[]def{{q: "flags", kind: "function", sig: "func flags()", body: "f", start: 3, end: 3}}, refs[:1], imports[:1]...)
+			for p, content := range tt.files {
+				r.put(headRev, p, content, nil)
+			}
+			opt := r.opts()
+			opt.GoModule = ""
+			res, err := Compute(context.Background(), r.src, baseRev, headRev, opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, line := range summarizeRefs(res.Footprint.Refs) {
+				if strings.HasPrefix(line, "svc/cmd/app/main.go:") {
+					got = append(got, line)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("refs:\n got %q\nwant %q", got, tt.want)
+			}
+			seen := map[string]bool{}
+			for _, read := range r.src.reads {
+				if seen[read] {
+					t.Errorf("%s read twice", read)
+				}
+				seen[read] = true
+			}
+		})
+	}
+}
+
 func TestComputeSkipsGoModWithoutGoFiles(t *testing.T) {
 	r := newRepo(gitx.DiffEntry{Status: "A", Path: "a.py"})
 	r.putFile(headRev, "a.py", "f()\n", nil, []model.Ref{call("f", "", 1)})
