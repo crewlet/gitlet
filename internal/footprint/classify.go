@@ -156,9 +156,10 @@ func (c comparison) params(old, new []model.Param) (ok, changed bool) {
 
 // members compares the exported shape of type-like symbols by member name:
 // existing members must stay as they were (an annotation may be added), and
-// new members are allowed only where memberAddable says so. Reordering is
-// allowed where members form a set (structs, classes, interfaces, traits),
-// and breaking where the order carries meaning (enum values, aliases).
+// new members are allowed only where memberAddable says so, in a Python
+// class only after the existing ones. Reordering is allowed where members
+// form a set to callers, and breaking where the order carries meaning
+// (orderedMembers).
 func (c comparison) members(old, new []model.Member) (ok, changed bool) {
 	oldBy, newBy := groupMembers(old), groupMembers(new)
 	for name, os := range oldBy {
@@ -192,15 +193,53 @@ func (c comparison) members(old, new []model.Member) (ok, changed bool) {
 		}
 		changed = true
 	}
+	if c.family == "python" && c.kind == "class" && !addedLast(old, new) {
+		return false, false // the positional constructor's fields shift
+	}
 	if reordered(old, new) {
-		switch c.kind {
-		case "struct", "class", "interface", "trait":
-			changed = true
-		default:
+		if c.orderedMembers() {
 			return false, false
 		}
+		changed = true
 	}
 	return true, changed
+}
+
+// orderedMembers reports whether callers depend on the order of the
+// members: the fields of a Go struct (unkeyed composite literals) and of a
+// Python class (the positional constructor of a dataclass or NamedTuple,
+// which the signature cannot tell from a plain class), enum values and
+// aliases. The members of interfaces, traits, Rust structs and TypeScript
+// classes form a set.
+func (c comparison) orderedMembers() bool {
+	switch c.kind {
+	case "interface", "trait":
+		return false
+	case "struct":
+		return c.lang == "go"
+	case "class":
+		return c.family == "python"
+	}
+	return true
+}
+
+// addedLast reports whether every member new adds comes after all the
+// members it keeps from old.
+func addedLast(old, new []model.Member) bool {
+	inOld := make(map[string]bool, len(old))
+	for _, m := range old {
+		inOld[m.Name] = true
+	}
+	added := false
+	for _, m := range new {
+		switch {
+		case !inOld[m.Name]:
+			added = true
+		case added:
+			return false
+		}
+	}
+	return true
 }
 
 // reordered reports whether the members both lists share appear in a

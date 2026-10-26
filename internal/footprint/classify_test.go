@@ -211,16 +211,33 @@ func TestClassify(t *testing.T) {
 		// Reordering.
 		{"go: interface methods reordered", typ("go", "interface", "type T interface{A();B()}", method("A", "()"), method("B", "()")),
 			typ("go", "interface", "type T interface{B();A()}", method("B", "()"), method("A", "()")), false},
+		// Unkeyed composite literals list a Go struct's fields in order.
 		{"go: struct fields reordered", typ("go", "struct", "type T struct{A int;B int}", field("A", "int"), field("B", "int")),
-			typ("go", "struct", "type T struct{B int;A int}", field("B", "int"), field("A", "int")), false},
+			typ("go", "struct", "type T struct{B int;A int}", field("B", "int"), field("A", "int")), true},
+		{"go: struct field inserted between others", typ("go", "struct", "type T struct{A int;C int}", field("A", "int"), field("C", "int")),
+			typ("go", "struct", "type T struct{A int;B int;C int}", field("A", "int"), field("B", "int"), field("C", "int")), false},
 		{"go: interface reordered with a method added", typ("go", "interface", "type T interface{A();B()}", method("A", "()"), method("B", "()")),
 			typ("go", "interface", "type T interface{B();A();C()}", method("B", "()"), method("A", "()"), method("C", "()")), true},
 		{"rust: trait items reordered", typ("rust", "trait", "trait T{fn a();fn b()}", method("a", "fn a()"), method("b", "fn b()")),
 			typ("rust", "trait", "trait T{fn b();fn a()}", method("b", "fn b()"), method("a", "fn a()")), false},
+		{"rust: struct fields reordered", typ("rust", "struct", "struct T{a:i32,b:i32}", field("a", "i32"), field("b", "i32")),
+			typ("rust", "struct", "struct T{b:i32,a:i32}", field("b", "i32"), field("a", "i32")), false},
 		{"rust: enum variants reordered", typ("rust", "enum", "enum T{A,B}", field("A", ""), field("B", "")),
 			typ("rust", "enum", "enum T{B,A}", field("B", ""), field("A", "")), true},
 		{"ts: enum members reordered", typ("typescript", "enum", "enum T{A,B}", field("A", ""), field("B", "")),
 			typ("typescript", "enum", "enum T{B,A}", field("B", ""), field("A", "")), true},
+		{"ts: interface members reordered", typ("typescript", "interface", "interface T{a:string;b:number}", field("a", "string"), field("b", "number")),
+			typ("typescript", "interface", "interface T{b:number;a:string}", field("b", "number"), field("a", "string")), false},
+		{"ts: class fields reordered", typ("typescript", "class", "class T{a:string;b:number}", field("a", "string"), field("b", "number")),
+			typ("typescript", "class", "class T{b:number;a:string}", field("b", "number"), field("a", "string")), false},
+		// Annotated class attributes are the positional constructor of a
+		// dataclass or NamedTuple, and the signature cannot tell those apart.
+		{"py: class fields reordered", typ("python", "class", "class T {x: int; y: int}", field("x", "int"), field("y", "int")),
+			typ("python", "class", "class T {y: int; x: int}", field("y", "int"), field("x", "int")), true},
+		{"py: optional field inserted between others", typ("python", "class", "class T {a: int = ?; c: int = ?}", optField("a", "int"), optField("c", "int")),
+			typ("python", "class", "class T {a: int = ?; b: int = ?; c: int = ?}", optField("a", "int"), optField("b", "int"), optField("c", "int")), true},
+		{"py: optional field appended", typ("python", "class", "class T {a: int = ?; c: int = ?}", optField("a", "int"), optField("c", "int")),
+			typ("python", "class", "class T {a: int = ?; c: int = ?; d: int = ?}", optField("a", "int"), optField("c", "int"), optField("d", "int")), false},
 
 		// Python parameter names.
 		{"py: positional-only parameter gets a name", pyFn("def f(a, /)", named("", "")), pyFn("def f(a)", named("a", "")), false},
@@ -356,7 +373,21 @@ func TestClassifyExtracted(t *testing.T) {
 		{"rust: private field with fields reordered", "a.rs",
 			"pub struct S {\n    pub a: u8,\n    pub b: u8,\n}\n", "pub struct S {\n    pub b: u8,\n    pub a: u8,\n    c: u8,\n}\n", "S", true},
 
+		// Member order that callers depend on.
+		{"py: dataclass fields swapped", "a.py",
+			"@dataclass\nclass Point:\n    x: int\n    y: int\n", "@dataclass\nclass Point:\n    y: int\n    x: int\n", "Point", true},
+		{"py: NamedTuple fields swapped", "a.py",
+			"class P(NamedTuple):\n    x: int\n    y: str\n", "class P(NamedTuple):\n    y: str\n    x: int\n", "P", true},
+		{"py: dataclass optional field inserted", "a.py",
+			"@dataclass\nclass Opts:\n    a: int = 1\n    c: int = 3\n", "@dataclass\nclass Opts:\n    a: int = 1\n    b: int = 2\n    c: int = 3\n", "Opts", true},
+		{"go: struct fields swapped", "a.go",
+			"package a\n\ntype P struct {\n\tX int\n\tY int\n}\n", "package a\n\ntype P struct {\n\tY int\n\tX int\n}\n", "P", true},
+
 		// Allowed changes alone stay compatible.
+		{"py: dataclass optional field appended", "a.py",
+			"@dataclass\nclass Opts:\n    a: int = 1\n    c: int = 3\n", "@dataclass\nclass Opts:\n    a: int = 1\n    c: int = 3\n    d: int = 4\n", "Opts", false},
+		{"ts: interface members reordered", "a.ts",
+			"export interface O {\n  a: string\n  b: number\n}\n", "export interface O {\n  b: number\n  a: string\n}\n", "O", false},
 		{"js: defaulted parameter", "a.js",
 			"export function load(path) {}\n", "export function load(path, opts = {}) {}\n", "load", false},
 		{"ts: optional parameter", "a.ts",

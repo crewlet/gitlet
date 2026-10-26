@@ -643,14 +643,19 @@ A signature change is **compatible** when old callers keep working:
 - visibility widened;
 - a type annotation added where there was none (Python, TypeScript);
 - for structs, classes and TypeScript interfaces: optional members or fields
-  added, and for Go structs any field added.
+  added (in a Python class only after the existing fields), and for Go
+  structs any field added;
+- members reordered where callers do not see their order: Go interfaces,
+  Rust traits and structs, TypeScript interfaces and classes.
 
 Everything else is **breaking**: removed or reordered parameters, changed
 types, a changed return type, visibility narrowed, a Python parameter renamed,
 members removed or changed, a method added to a Go interface or Rust trait, a
-required member added to a TypeScript interface, and every `removed` or
-`renamed` symbol. A `moved` symbol is breaking only when its module (9.6)
-changes.
+required member added to a TypeScript interface, reordered enum values and
+reordered fields of a Go struct (unkeyed composite literals) or a Python class
+(the positional constructor of a dataclass or `NamedTuple`, which the
+signature cannot tell from a plain class), and every `removed` or `renamed`
+symbol. A `moved` symbol is breaking only when its module (9.6) changes.
 
 A change is compatible only when every difference is on the first list. An
 optional parameter appended together with any other difference, such as
