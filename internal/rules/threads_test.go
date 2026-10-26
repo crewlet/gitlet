@@ -406,6 +406,19 @@ func TestAgreementNotes(t *testing.T) {
 	if !slices.Contains(n.Quotes, model.Quote{From: bob, Text: "you own it; I need Options"}) {
 		t.Fatalf("owner's note lacks the others' requirements: %+v", n.Quotes)
 	}
+	if !strings.Contains(n.Body, "gitlet claims it for you first") {
+		t.Fatalf("owner's note without a holder: %q", n.Body)
+	}
+	// Bob holds the claim and agreed that I own it: only his gitlet can move
+	// the claim, so mine does not claim it.
+	n = one(t, eval(t, clash().claim(cfg.Key, bob, bobItem, 0).
+		msg(say(bob, bobItem, "m1", 0, "you own it", propMine)).accept(me, sigID, propMine.ID).v), model.NoteAgreement)
+	if strings.Contains(n.Body, "gitlet claims it for you") || !strings.Contains(n.Body, string(bob)+" still holds its claim: its gitlet hands the claim over to you") {
+		t.Fatalf("owner's note while the holder hands over: %q", n.Body)
+	}
+	if !slices.Equal(tools(n), []string{"publish"}) {
+		t.Fatalf("owner's note while the holder hands over offers %v", tools(n))
+	}
 }
 
 func TestDuplicateThreadAgreement(t *testing.T) {

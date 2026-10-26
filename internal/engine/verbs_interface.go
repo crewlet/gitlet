@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/gitlet/internal/gitx"
 	"github.com/crewlet/gitlet/internal/model"
 	"github.com/crewlet/gitlet/internal/render"
+	"github.com/crewlet/gitlet/internal/rules"
 )
 
 const (
@@ -149,6 +151,18 @@ func noTaskRefusal(verb, ref string) api.Result {
 // signature, plus the takeover when the holder's lease lapsed.
 func (e *Engine) heldRefusal(ctx context.Context, verb string, sym model.Symbol, cv bus.ClaimView, note string) api.Result {
 	ref, c := sym.Ref(), cv.Claim
+	if thread := e.pendingHandOver(ctx, sym.Key); thread != "" && c.Owner != "" {
+		// The holder agreed that I own it, and only the holder moves a
+		// claim (docs/SPEC.md, section 11): building on its version would
+		// undo the agreement.
+		opts := []model.Option{toolOption("try again once the claim is yours (status shows it)", verb, "symbol", ref, "note", note), statusOption()}
+		if cv.OID != "" && e.claimLapsed(ctx, cv) {
+			opts = append(opts, toolOption("take the lapsed claim over", "claim", "symbol", ref, "note", note))
+		}
+		return refused(fmt.Sprintf("Cannot %s %s yet: you own it by agreement, but %s still holds its claim until its gitlet hands it over.", verb, ref, c.Owner),
+			[]string{fmt.Sprintf("thread %s settled with you as the owner; %s's gitlet transfers the claim to you when it next reads the remote", thread, c.Owner)},
+			opts...)
+	}
 	summary := fmt.Sprintf("Cannot %s %s: %s holds its claim.", verb, ref, c.Owner)
 	if c.Owner == "" {
 		summary = fmt.Sprintf("Cannot %s %s: another agent holds its claim.", verb, ref)
@@ -178,6 +192,19 @@ func (e *Engine) heldRefusal(ctx context.Context, verb string, sym model.Symbol,
 		opts = append(opts, toolOption("take the lapsed claim over", "claim", "symbol", ref, "note", note))
 	}
 	return refused(summary, details, opts...)
+}
+
+// pendingHandOver returns the settled signature thread that makes me the
+// owner of the symbol with key while another agent still holds its claim,
+// which that agent's gitlet then hands over (rules.ActClaim while someone
+// else holds it). "" when there is none.
+func (e *Engine) pendingHandOver(ctx context.Context, key string) string {
+	for _, d := range rules.Decisions(e.lightView(ctx)) {
+		if d.Key == key && d.Owner == e.me.ID && slices.Contains(d.Actions, rules.ActClaim) {
+			return d.Thread
+		}
+	}
+	return ""
 }
 
 // claimWriteRefusal turns a failed claim write into a refusal when it is

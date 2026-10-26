@@ -215,8 +215,12 @@ func (c *ctx) agreement(t *thread) {
 	case c.v.Me:
 		n.Title = fmt.Sprintf("You own %s: publish its signature", ref)
 		n.Body = "Publish the signature early so the others can build on it."
-		if cv, ok := c.claim(t.key); !ok || cv.Claim.Owner != c.v.Me {
+		if cv, ok := c.claim(t.key); !ok {
 			n.Body += " gitlet claims it for you first."
+		} else if cv.Claim.Owner != c.v.Me {
+			// Only the holder moves a claim (docs/SPEC.md, section 11).
+			n.Body += fmt.Sprintf(" %s still holds its claim: its gitlet hands the claim over to you on its own, and publish works once you hold it.",
+				cv.Claim.Owner)
 		}
 		for _, p := range t.st.Participants {
 			if m, ok := t.latest(p.Agent); ok && p.Agent != c.v.Me && m.Text != "" &&

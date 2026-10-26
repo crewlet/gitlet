@@ -599,6 +599,72 @@ func TestIfcPublishRefusals(t *testing.T) {
 	}
 }
 
+// The holder agrees that the other side owns the symbol: until the holder's
+// gitlet hands the claim over, the new owner's publish waits for it rather
+// than offering to give the symbol back.
+func TestIfcPublishWaitsForTheAgreedHandOver(t *testing.T) {
+	p := newIfcPair(t, nil)
+	ctx := ctxT(t)
+	writeFile(t, p.f.a, "config.go", ifcConfig(ifcLoadStrFn))
+	writeFile(t, p.f.b, "config.go", ifcConfig(ifcLoadCtxFn))
+	ifcStart(t, p.a, "Add a strict flag to Load")
+	ifcStart(t, p.b, "Pass a context to Load")
+	p.clk.Advance(time.Minute)
+	must(t, p.a.Tick(ctx))
+	p.clk.Advance(time.Second)
+	must(t, p.b.Tick(ctx))
+	if c, _, ok := ifcRemoteClaim(t, p.f, ifcKey("config.go", "Load")); !ok || c.Owner != p.a.Agent().ID {
+		t.Fatalf("claim after the ticks: %+v %v, want a's", c, ok)
+	}
+
+	// a, the holder, proposes that b owns Load; b accepts.
+	p.fresh()
+	st, err := p.a.Status(ctx, api.StatusInput{})
+	must(t, err)
+	clash := flowNote(st.Notes, model.NoteSignatureClash)
+	if clash == nil {
+		t.Fatalf("a has no signature clash note: %v", noteKinds(st.Notes))
+	}
+	r, err := p.a.Discuss(ctx, api.DiscussInput{About: clash.ID, Message: "Take it; I adapt to the context.",
+		Proposal: &api.ProposalInput{Owner: "them", Summary: "b owns Load(ctx, path)"}})
+	must(t, err)
+	flowWant(t, "a's proposal", r.Result, api.OK)
+	p.fresh()
+	ra, err := p.b.Accept(ctx, api.AcceptInput{Proposal: r.Data.Message.Proposal.ID})
+	must(t, err)
+	flowWant(t, "b's accept", ra.Result, api.OK)
+	if !ra.Data.Agreed || ra.Data.Thread.Owner != p.b.Agent().ID {
+		t.Fatalf("after b's accept: %+v", ra.Data)
+	}
+
+	// a still holds the claim: b's publish waits for the hand-over.
+	pub, err := p.b.Publish(ctx, api.PublishInput{Symbol: ifcLoad})
+	must(t, err)
+	ifcRefused(t, "publish before the hand-over", pub.Result)
+	if !strings.Contains(pub.Summary, "you own it by agreement") || !strings.Contains(pub.Summary, string(p.a.Agent().ID)) {
+		t.Errorf("refusal before the hand-over: %q", pub.Summary)
+	}
+	if _, ok := ifcOption(pub.Result, "need"); ok {
+		t.Errorf("refusal offers to give the agreed symbol back: %+v", pub.Options)
+	}
+	if o, ok := ifcOption(pub.Result, "publish"); !ok || o.Args["symbol"] != ifcLoad {
+		t.Errorf("refusal does not offer to publish again: %+v", pub.Options)
+	}
+
+	// a's gitlet hands the claim over on its next poll; then b publishes.
+	p.clk.Advance(time.Minute)
+	must(t, p.a.Tick(ctx))
+	if c, _, ok := ifcRemoteClaim(t, p.f, ifcKey("config.go", "Load")); !ok || c.Owner != p.b.Agent().ID {
+		t.Fatalf("claim after a's tick: %+v %v, want b's", c, ok)
+	}
+	p.fresh()
+	pub, err = p.b.Publish(ctx, api.PublishInput{Symbol: ifcLoad})
+	must(t, err)
+	if pub.Outcome != api.OK {
+		t.Fatalf("publish after the hand-over: %s %q %v", pub.Outcome, pub.Summary, pub.Details)
+	}
+}
+
 // ---- need ----
 
 func TestIfcNeedRecordsAndUpdates(t *testing.T) {
