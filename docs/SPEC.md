@@ -141,7 +141,7 @@ table in the engine. MCP clients add a namespace (Claude Code shows
 | `dismiss` | Close a note you will not act on. | `note`, `as`; `reason` |
 | `update` | Bring your branch up to date with main. Predicts conflicts first, drops stub commits whose contracts landed, and never leaves a half-finished rebase. | none; `note` |
 | `submit` | Your work is ready: check it against main and contracts, push the branch and open a pull request. Use instead of `git push` and `gh pr create`. Never merges. | none; `title`, `body`, `draft`, `symbol` |
-| `abandon` | Stop the current task: releases its claims and needs, deletes its snapshot ref and tells the others. Keeps the branch. | none; `reason` |
+| `abandon` | Stop the current task: releases its claims and needs, deletes its snapshot ref and tells the others. Keeps the branch. | none; `reason`, `item` |
 
 Every MCP tool also takes an optional `worktree` (an absolute path; the
 default is the server's directory).
@@ -179,6 +179,9 @@ adds trailers.
 - **requirement** (in `need`): what you need from the interface, for example
   "must keep returning Config". It is recorded on the owner's claim.
 - **paths** (in `start`): files you plan to touch, checked for overlap now.
+- **item** (in `abandon`): the id of one of my open items, as `status` shows
+  it, or any unique prefix of at least 4 characters. It defaults to the
+  active item, or without one to the submitted item of the current branch.
 
 CLI mapping: required arguments are positional in table order, and every other
 argument is a long flag of the same name. For example:
@@ -474,7 +477,10 @@ A work item is one task on one branch in one worktree.
   stub commit is an ancestor of main.
 - **`abandon`** marks the item abandoned, releases its claims and needs,
   deletes its wip ref, posts "abandoned" into its open threads, and keeps the
-  branch.
+  branch. It stops the active item, or the item `item` names. A submitted
+  item can be abandoned too, for example when its PR was closed unmerged
+  (it would otherwise never land and keep its claims); its PR is left as it
+  is.
 
 ## 8. Leases, liveness and visibility
 

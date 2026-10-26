@@ -1234,23 +1234,28 @@ func (e *Engine) abandon(ctx context.Context, in api.AbandonInput) (*api.Reply[a
 	return r, nil
 }
 
-// doAbandon stops the active item (docs/SPEC.md, section 7): it tells its
-// open threads, marks it abandoned, and releases its claims, needs and
-// snapshot ref. The branch stays as it is.
+// doAbandon stops an open item (docs/SPEC.md, section 7): the one item
+// names, else the active item, else the submitted item of the current
+// branch, such as one whose pull request was closed unmerged. It tells the
+// item's open threads, marks it abandoned, and releases its claims, needs
+// and snapshot ref. The branch and any pull request stay as they are.
 func (e *Engine) doAbandon(ctx context.Context, in api.AbandonInput) (*api.Reply[api.AbandonData], error) {
 	var data api.AbandonData
 	if refusal := e.worktreeRefusal("abandon", in.Where); refusal != nil {
 		return reply(*refusal, data), nil
 	}
-	it, ok := e.activeItem()
-	if !ok {
-		return reply(nothingToDo("You have no active task to abandon."), data), nil
+	it, other, err := e.abandonTarget(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if other != nil {
+		return reply(*other, data), nil
 	}
 	data.Item = it.ID
 	reason := strings.Join(strings.Fields(in.Reason), " ")
 	if utf8.RuneCountInString(reason) > maxReasonLen {
 		return reply(refused(fmt.Sprintf("Keep the reason under %d characters.", maxReasonLen), nil,
-			toolOption("abandon it with a shorter reason", "abandon", "reason", "")), data), nil
+			toolOption("abandon it with a shorter reason", "abandon", "item", strings.TrimSpace(in.Item), "reason", "")), data), nil
 	}
 	if e.readOnly() {
 		return reply(e.readOnlyRefusal("abandon"), data), nil
@@ -1265,7 +1270,7 @@ func (e *Engine) doAbandon(ctx context.Context, in api.AbandonInput) (*api.Reply
 	now := e.now().UTC()
 	_, err = e.mutateState(ctx, func(st *model.AgentState) error {
 		i := itemIndex(st.Items, it.ID)
-		if i < 0 || st.Items[i].Status != model.ItemActive {
+		if i < 0 || !st.Items[i].Status.Open() {
 			return errNoChange
 		}
 		st.Items[i].Status, st.Items[i].ClosedAt, st.Items[i].UpdatedAt = model.ItemAbandoned, &now, now
@@ -1291,11 +1296,70 @@ func (e *Engine) doAbandon(ctx context.Context, in api.AbandonInput) (*api.Reply
 	if told > 0 {
 		details = append(details, fmt.Sprintf("told the others in %s", pluralize(told, "thread")))
 	}
+	if it.PR != "" {
+		details = append(details, fmt.Sprintf("gitlet does not close %s: close it on your git host if it is still open", it.PR))
+	}
 	where := "it had no branch"
 	if it.Branch != "" {
 		where = "branch " + it.Branch + " and its commits are kept"
 	}
 	return reply(okResult(fmt.Sprintf("Abandoned %q; %s.", it.Intent, where), details...), data), nil
+}
+
+// abandonTarget picks the item abandon stops: the open item in.Item names
+// (its id or a unique prefix), else the active item, else the submitted
+// item of the current branch. When there is none it returns the result to
+// give instead: a refusal for an item that matches no open item, or
+// nothing_to_do, with a way to abandon each submitted item elsewhere.
+func (e *Engine) abandonTarget(ctx context.Context, in api.AbandonInput) (model.WorkItem, *api.Result, error) {
+	items := e.myState().Items
+	reason := strings.TrimSpace(in.Reason)
+	var opts []model.Option
+	for _, it := range items {
+		if it.Status.Open() {
+			opts = append(opts, toolOption(fmt.Sprintf("stop your %s task %q", it.Status, it.Intent), "abandon", "item", string(it.ID), "reason", reason))
+		}
+	}
+	if arg := strings.TrimSpace(in.Item); arg != "" {
+		ids := make([]string, len(items))
+		for i, it := range items {
+			ids[i] = string(it.ID)
+		}
+		id, _, err := matchID("", arg, ids)
+		if err != nil {
+			summary := fmt.Sprintf("No task of yours matches %q.", arg)
+			switch {
+			case errors.Is(err, errIDShort):
+				summary = fmt.Sprintf("%q is too short: give at least %d characters of the task id.", arg, minIDPrefix)
+			case errors.Is(err, errIDAmbiguous):
+				summary = fmt.Sprintf("%q matches several of your tasks: give more characters.", arg)
+			}
+			r := refused(summary, []string{"item takes the id of an open task of yours, as status shows it"}, append(opts, statusOption())...)
+			return model.WorkItem{}, &r, nil
+		}
+		it := items[itemIndex(items, model.ItemID(id))]
+		if !it.Status.Open() {
+			r := nothingToDo(fmt.Sprintf("Your task %q is %s already.", it.Intent, it.Status))
+			return model.WorkItem{}, &r, nil
+		}
+		return it, nil, nil
+	}
+	if it, ok := e.activeItem(); ok {
+		return it, nil, nil
+	}
+	branch, err := e.repo.CurrentBranch(ctx)
+	if err != nil {
+		return model.WorkItem{}, nil, fmt.Errorf("engine: abandon: %w", err)
+	}
+	if it, ok := e.branchItem(branch); ok && branch != "" {
+		return it, nil, nil
+	}
+	r := nothingToDo("You have no active task to abandon.")
+	if len(opts) > 0 {
+		r.Details = []string{"your submitted tasks stay open until they land; abandon one by its id if its pull request was closed or you dropped it"}
+		r.Options = opts
+	}
+	return model.WorkItem{}, &r, nil
 }
 
 // tellAbandoned posts an "abandoned" message, with the reason, into every

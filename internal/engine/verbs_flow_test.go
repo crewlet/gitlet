@@ -1235,3 +1235,81 @@ func TestFlowAbandon(t *testing.T) {
 	must(t, err)
 	flowWant(t, "abandon again", again.Result, api.NothingToDo)
 }
+
+func TestFlowAbandonASubmittedTask(t *testing.T) {
+	requireDeps(t)
+	flowFakeGh(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	status := func(id model.ItemID) model.ItemStatus {
+		var s model.ItemStatus
+		flowLocked(ea, func() { _, it, _ := ea.findItem(id); s = it.Status })
+		return s
+	}
+	submit := func(intent, file, content string) (model.ItemID, string) {
+		t.Helper()
+		clk.Advance(6 * time.Second)
+		id, branch := flowStart(t, ctx, ea, intent)
+		head := flowCommit(t, f.a, intent, file, content)
+		if file == "default.go" {
+			flowClaim(t, ctx, ea, id, head, "default.go", "Default", false, "")
+		}
+		r, err := ea.Submit(ctx, api.SubmitInput{})
+		must(t, err)
+		flowWant(t, "submit "+intent, r.Result, api.OK)
+		return id, branch
+	}
+	x, _ := submit("Use gitlet.json by default", "default.go", strings.Replace(mainGo, "gitlet.toml", "gitlet.json", 1))
+	y, yBranch := submit("Add a README section about logging", "README.md", "# demo\n\n## Logging\n")
+
+	// With no task of the branch checked out, abandon says how to drop
+	// each submitted one.
+	runGit(t, f.a, "checkout", "-q", "main")
+	r, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon on main", r.Result, api.NothingToDo)
+	if !flowHasTool(r.Options, "abandon", "item", string(x)) || !flowHasTool(r.Options, "abandon", "item", string(y)) {
+		t.Errorf("options %+v", r.Options)
+	}
+
+	// On a submitted task's branch, with no active task, abandon stops it.
+	runGit(t, f.a, "checkout", "-q", yBranch)
+	r, err = ea.Abandon(ctx, api.AbandonInput{Reason: "the pull request was closed"})
+	must(t, err)
+	flowWant(t, "abandon the submitted task of the branch", r.Result, api.OK)
+	if r.Data.Item != y || status(y) != model.ItemAbandoned || status(x) != model.ItemSubmitted {
+		t.Fatalf("abandoned %s: x %s, y %s", r.Data.Item, status(x), status(y))
+	}
+	if !slices.ContainsFunc(r.Details, func(d string) bool { return strings.Contains(d, flowPRURL) }) {
+		t.Errorf("details do not mention the pull request: %v", r.Details)
+	}
+
+	// item names a submitted task while another is active.
+	clk.Advance(6 * time.Second)
+	z, _ := flowStart(t, ctx, ea, "Read the configuration from the environment")
+	r, err = ea.Abandon(ctx, api.AbandonInput{Item: string(x)[:6], Reason: "superseded"})
+	must(t, err)
+	flowWant(t, "abandon item", r.Result, api.OK)
+	if r.Data.Item != x || !slices.Contains(r.Data.Released, "claim default.go:Default") {
+		t.Errorf("data %+v", r.Data)
+	}
+	if status(x) != model.ItemAbandoned || status(z) != model.ItemActive {
+		t.Errorf("x %s, z %s", status(x), status(z))
+	}
+	if refs := runGit(t, f.remote, "for-each-ref", bus.ClaimsPrefix); refs != "" {
+		t.Errorf("claims left on the remote:\n%s", refs)
+	}
+
+	// An item that is no open task of mine is refused with the ones that are.
+	r, err = ea.Abandon(ctx, api.AbandonInput{Item: "ffff"})
+	must(t, err)
+	flowWant(t, "abandon an unknown item", r.Result, api.Refused)
+	if !flowHasTool(r.Options, "abandon", "item", string(z)) {
+		t.Errorf("options %+v", r.Options)
+	}
+	r, err = ea.Abandon(ctx, api.AbandonInput{Item: string(x)})
+	must(t, err)
+	flowWant(t, "abandon an abandoned item", r.Result, api.NothingToDo)
+}

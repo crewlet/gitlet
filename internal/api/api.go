@@ -150,6 +150,7 @@ type SubmitInput struct {
 
 type AbandonInput struct {
 	Reason string `json:"reason,omitempty"`
+	Item   string `json:"item,omitempty" jsonschema:"the task to stop, by the id status shows; default: your active task, else the submitted task of the current branch"`
 	Where
 }
 
@@ -513,9 +514,12 @@ var Verbs = []Verb{
 		Input:     t[SubmitInput](), Data: t[SubmitData](),
 	},
 	{
-		Name:        "abandon",
-		Summary:     "Stop your current task: releases its claims and needs, deletes its snapshot ref and tells the others. Your branch is kept.",
-		Args:        []Arg{{Name: "reason", Kind: KindString, Help: "why"}},
+		Name:    "abandon",
+		Summary: "Stop your current task: releases its claims and needs, deletes its snapshot ref and tells the others. Your branch is kept.",
+		Args: []Arg{
+			{Name: "reason", Kind: KindString, Help: "why"},
+			{Name: "item", Kind: KindString, Help: "the task to stop, by its id from status; default: your current task"},
+		},
 		Destructive: true,
 		Input:       t[AbandonInput](), Data: t[AbandonData](),
 	},
