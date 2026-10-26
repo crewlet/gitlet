@@ -72,8 +72,8 @@ func TestComputeFiles(t *testing.T) {
 		t.Errorf("renamed file's old side not read from its old path: %v", r.src.reads)
 	}
 	fp := res.Footprint
-	if fp.Base != baseRev || fp.Head != headRev || !fp.ComputedAt.Equal(testNow) || res.Truncated || fp.Broad {
-		t.Errorf("footprint header = %q %q %v truncated=%v broad=%v", fp.Base, fp.Head, fp.ComputedAt, res.Truncated, fp.Broad)
+	if fp.Base != baseRev || fp.Head != headRev || fp.Version != Version || !fp.ComputedAt.Equal(testNow) || res.Truncated || fp.Broad {
+		t.Errorf("footprint header = %q %q version %d %v truncated=%v broad=%v", fp.Base, fp.Head, fp.Version, fp.ComputedAt, res.Truncated, fp.Broad)
 	}
 }
 

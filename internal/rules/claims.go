@@ -53,7 +53,7 @@ func (c *ctx) autoReason(m *entry, k string, ch model.SymbolChange) string {
 	}
 	old := oldSymbol(ch)
 	for _, o := range c.others(m) {
-		if _, resolved := c.matching(o.item.Footprint.Refs, old); resolved {
+		if _, resolved := c.matching(o.item.Footprint, old); resolved {
 			return fmt.Sprintf("breaking signature change meets references in %s's item %s", o.agent, o.id())
 		}
 	}

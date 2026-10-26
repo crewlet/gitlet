@@ -851,7 +851,7 @@ func (e *Engine) whoEntries(ctx context.Context, t target, v rules.View, skip mo
 				w.Role, w.Detail = "changes", detail
 				out = append(out, w)
 			}
-			if detail, ok := referencesTarget(it.Footprint.Refs, defs, counts); ok {
+			if detail, ok := referencesTarget(it.Footprint, defs, counts); ok {
 				w := base
 				w.Role, w.Detail = "references", detail
 				out = append(out, w)
@@ -1056,17 +1056,17 @@ func fileStatusWord(status string) string {
 	return "changes"
 }
 
-// referencesTarget reports whether new code refers to any of defs, with up
-// to three of the referring places.
-func referencesTarget(refs []model.Ref, defs []model.Symbol, counts map[string]int) (string, bool) {
+// referencesTarget reports whether the new code of fp refers to any of
+// defs, with up to three of the referring places.
+func referencesTarget(fp model.Footprint, defs []model.Symbol, counts map[string]int) (string, bool) {
 	if len(defs) == 0 {
 		return "", false
 	}
 	var places []string
 	seen := map[string]bool{}
-	for _, ref := range refs {
+	for _, ref := range fp.Refs {
 		for _, d := range defs {
-			if ok, _ := rules.Match(ref, d, counts[d.Name] <= 1); !ok {
+			if ok, _ := rules.Match(ref, fp.Version, d, counts[d.Name] <= 1); !ok {
 				continue
 			}
 			place := fmt.Sprintf("%s %s at %s:%d", refVerb(ref.Kind), d.Qualified, ref.Path, ref.Line)

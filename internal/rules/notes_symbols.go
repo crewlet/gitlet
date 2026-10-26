@@ -28,7 +28,7 @@ func (c *ctx) calleeChanged(m *entry) {
 			if _, mineToo := m.changes[k]; mineToo || c.hasNeed(m, k) {
 				continue
 			}
-			refs, resolved := c.matching(m.item.Footprint.Refs, oldSymbol(ch))
+			refs, resolved := c.matching(m.item.Footprint, oldSymbol(ch))
 			if len(refs) == 0 {
 				continue
 			}
@@ -105,7 +105,7 @@ func (c *ctx) callersAffected(m *entry) {
 			if _, theirsToo := o.changes[k]; theirsToo || c.hasNeed(o, k) {
 				continue
 			}
-			refs, resolved := c.matching(o.item.Footprint.Refs, old)
+			refs, resolved := c.matching(o.item.Footprint, old)
 			if len(refs) == 0 {
 				continue
 			}
@@ -326,7 +326,7 @@ func (c *ctx) stale(m *entry) {
 			continue
 		}
 		old := oldSymbol(ch)
-		refs, resolved := c.matching(m.item.Footprint.Refs, old)
+		refs, resolved := c.matching(m.item.Footprint, old)
 		if len(refs) == 0 {
 			continue
 		}
@@ -378,7 +378,7 @@ func (c *ctx) newCallers(m *entry) {
 			continue
 		}
 		old := oldSymbol(ch)
-		refs, resolved := c.matching(mv.Footprint.Refs, old)
+		refs, resolved := c.matching(mv.Footprint, old)
 		if len(refs) == 0 {
 			continue
 		}

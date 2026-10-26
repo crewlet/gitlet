@@ -14,7 +14,9 @@ import (
 
 // Version changes whenever Compute can give a different footprint for the
 // same two commits (new fields, classification or resolution rules), so
-// caches keyed by commits do not serve results of an older version.
+// caches keyed by commits do not serve results of an older version, and
+// footprints stored with an older one are computed again. Compute records
+// it in Footprint.Version.
 const Version = 2
 
 // Source reads files at revisions and lists changed files. *gitx.Repo

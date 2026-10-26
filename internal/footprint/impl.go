@@ -73,6 +73,7 @@ func compute(ctx context.Context, src Source, base, head string, opt Options) (R
 	fp := model.Footprint{
 		Base:       base,
 		Head:       head,
+		Version:    Version,
 		Files:      c.files,
 		Symbols:    c.changes,
 		Refs:       sortRefs(c.refs),

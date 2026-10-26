@@ -153,11 +153,12 @@ func Similarity(a, b string, corpus []string) (score float64, shared int) {
 	return similarity(a, b, corpus)
 }
 
-// Match says whether ref refers to sym (docs/SPEC.md, section 9.6). resolved
-// is false when the match relies only on a unique method name, in which case
-// uniqueMethod must be true for a match.
-func Match(ref model.Ref, sym model.Symbol, uniqueMethod bool) (match, resolved bool) {
-	return matchRef(ref, sym, uniqueMethod)
+// Match says whether ref, from a footprint of the given Footprint.Version,
+// refers to sym (docs/SPEC.md, section 9.6). resolved is false when the
+// match relies only on a unique method name, in which case uniqueMethod
+// must be true for a match.
+func Match(ref model.Ref, version int, sym model.Symbol, uniqueMethod bool) (match, resolved bool) {
+	return matchRef(ref, version, sym, uniqueMethod)
 }
 
 // HotFile classifies a path: "lockfile", "changelog", or "".

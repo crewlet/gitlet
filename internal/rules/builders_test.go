@@ -86,7 +86,8 @@ type itemOpt func(*model.WorkItem)
 
 func item(id model.ItemID, intent string, opts ...itemOpt) model.WorkItem {
 	it := model.WorkItem{ID: id, Intent: intent, Branch: "gitlet/" + model.Slug(intent, 20) + "-" + string(id[:4]),
-		Base: "base0", Head: "head-" + string(id), Status: model.ItemActive, OpenedAt: t0.Add(-time.Hour)}
+		Base: "base0", Head: "head-" + string(id), Status: model.ItemActive, OpenedAt: t0.Add(-time.Hour),
+		Footprint: model.Footprint{Version: containerVersion}}
 	for _, o := range opts {
 		o(&it)
 	}
@@ -131,6 +132,10 @@ func addFile(it *model.WorkItem, f model.FileChange) {
 
 func unparsed(path string) model.FileChange { return model.FileChange{Path: path, Status: "M"} }
 func added(path string) model.FileChange    { return model.FileChange{Path: path, Status: "A"} }
+
+// olderFootprint makes the footprint one an older gitlet stored, before
+// footprints recorded their version.
+func olderFootprint() itemOpt { return func(it *model.WorkItem) { it.Footprint.Version = 0 } }
 
 func submitted() itemOpt   { return func(it *model.WorkItem) { it.Status = model.ItemSubmitted } }
 func provisional() itemOpt { return func(it *model.WorkItem) { it.Provisional = true } }
@@ -244,6 +249,9 @@ func (b *vb) conflict(mine, other model.ItemID, paths ...string) *vb {
 }
 
 func (b *vb) main(it model.ItemID, fp model.Footprint) *vb {
+	if fp.Version == 0 {
+		fp.Version = containerVersion
+	}
 	b.v.Main[it] = MainView{Main: "main1", Footprint: fp}
 	return b
 }

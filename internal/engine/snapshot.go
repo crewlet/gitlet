@@ -273,7 +273,9 @@ func (e *Engine) onSubmittedBranch(ctx context.Context, items []model.WorkItem) 
 }
 
 // activeUpdate computes the active item's snapshot, base (merge base of the
-// snapshot with main), branch and footprint.
+// snapshot with main), branch and footprint. The footprint is computed again
+// when the snapshot or base moved, or when an older footprint.Version
+// computed it.
 func (e *Engine) activeUpdate(ctx context.Context, it model.WorkItem, main string) (itemUpdate, bool) {
 	snap := e.snap.Commit
 	base := it.Base
@@ -289,7 +291,7 @@ func (e *Engine) activeUpdate(ctx context.Context, it model.WorkItem, main strin
 		branch = ""
 	}
 	u := itemUpdate{id: it.ID, base: base, snapshot: snap, head: e.snap.Head, branch: branch}
-	if base != "" && (it.Footprint.Base != base || it.Footprint.Head != snap) {
+	if base != "" && (it.Footprint.Base != base || it.Footprint.Head != snap || it.Footprint.Version < footprint.Version) {
 		if fp, err := e.footprint(ctx, base, snap); err == nil {
 			u.fp, u.setFP = fp, true
 		} else {
@@ -302,7 +304,8 @@ func (e *Engine) activeUpdate(ctx context.Context, it model.WorkItem, main strin
 }
 
 // submittedUpdate follows a submitted item's branch head (review fixes keep
-// landing on it) and recomputes its footprint when head or base moved.
+// landing on it) and recomputes its footprint when head or base moved, or
+// when an older footprint.Version computed it.
 func (e *Engine) submittedUpdate(ctx context.Context, it model.WorkItem, main string) (itemUpdate, bool) {
 	head := it.Head
 	if it.Branch != "" {
@@ -319,7 +322,8 @@ func (e *Engine) submittedUpdate(ctx context.Context, it model.WorkItem, main st
 			base = b
 		}
 	}
-	if it.Head == head && it.Base == base && it.Footprint.Base == base && it.Footprint.Head == head {
+	if it.Head == head && it.Base == base && it.Footprint.Base == base && it.Footprint.Head == head &&
+		it.Footprint.Version >= footprint.Version {
 		return itemUpdate{}, false
 	}
 	u := itemUpdate{id: it.ID, base: base, head: head}
@@ -444,6 +448,9 @@ func (e *Engine) footprint(ctx context.Context, base, head string) (model.Footpr
 func (e *Engine) cachedFootprint(ctx context.Context, prefix, base, head string, maxParsed int) (model.Footprint, error) {
 	key := fmt.Sprintf("v%d:%s%s..%s", footprint.Version, prefix, base, head)
 	if fp, ok, err := e.led.CachedFootprint(ctx, key); err == nil && ok {
+		// The key names the version; entries cached before footprints
+		// recorded it lack the field.
+		fp.Version = footprint.Version
 		return fp, nil
 	}
 	res, err := footprint.Compute(ctx, e.bg, base, head, footprint.Options{

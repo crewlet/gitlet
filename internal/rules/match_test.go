@@ -120,9 +120,38 @@ func TestMatch(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m, r := Match(tt.ref, tt.sym, tt.unique)
+			m, r := Match(tt.ref, containerVersion, tt.sym, tt.unique)
 			if m != tt.match || r != tt.resolve {
 				t.Fatalf("Match = (%t, %t), want (%t, %t)", m, r, tt.match, tt.resolve)
+			}
+		})
+	}
+}
+
+// A footprint computed before refs recorded their container (version 0, as
+// stored by an older gitlet) leaves Container empty whatever its qualifier
+// named, so its resolved refs match by module alone, as they did then.
+func TestMatchOlderFootprint(t *testing.T) {
+	method := fn("python", "cfg.py", "Config.load", "def load(cls)")
+	modFn := fn("python", "cfg.py", "load", "def load()")
+	elsewhere := fn("python", "other.py", "Config.load", "def load(cls)")
+	call := model.Ref{Name: "load", Qualifier: "Config", Kind: model.RefCall, Lang: "python", Path: "app.py", Line: 4, Module: "cfg", Resolved: true}
+	tests := []struct {
+		name    string
+		version int
+		sym     model.Symbol
+		match   bool
+	}{
+		{"older: a class-qualified call reaches the method", 0, method, true},
+		{"older: and the module's function of that name", 0, modFn, true},
+		{"older: not another module", 0, elsewhere, false},
+		{"current: no container reaches no method", containerVersion, method, false},
+		{"current: but the module's function", containerVersion, modFn, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if m, r := Match(call, tt.version, tt.sym, false); m != tt.match || r != tt.match {
+				t.Fatalf("Match = (%t, %t), want (%t, %t)", m, r, tt.match, tt.match)
 			}
 		})
 	}

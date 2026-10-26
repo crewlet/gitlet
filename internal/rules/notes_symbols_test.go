@@ -24,6 +24,14 @@ var (
 	callPyCfg = ref("Config", "python", "pkg/app.py", 5, "pkg/config")
 )
 
+// loadCall is a resolved static call Config.load() into src/config, with
+// the container the resolver gave it.
+func loadCall(container string) model.Ref {
+	r := ref("load", "typescript", "src/app.ts", 31, "src/config")
+	r.Qualifier, r.Container = "Config", container
+	return r
+}
+
 const (
 	myIntent  = "Add strict mode to config loading"
 	bobIntent = "Rework the config parser for strictness"
@@ -78,6 +86,12 @@ func TestCalleeChanged(t *testing.T) {
 			peer(bob, item(bobItem, bobIntent, changes(sigChange(tsCtor, "constructor(string, number)", true)))).v, model.SeverityAct},
 		{"python __init__ through a call of the class", view().mine(item(myItem, myIntent, refs(callPyCfg))).
 			peer(bob, item(bobItem, bobIntent, changes(sigChange(pyInit, "def __init__(self, path, mode)", true)))).v, model.SeverityAct},
+		{"method through its class", view().mine(item(myItem, myIntent, refs(loadCall("Config")))).
+			peer(bob, item(bobItem, bobIntent, changes(sigChange(loadM, "load(string, boolean): void", true)))).v, model.SeverityAct},
+		{"method through its class, from an older gitlet's footprint", view().mine(item(myItem, myIntent, refs(loadCall("")), olderFootprint())).
+			peer(bob, item(bobItem, bobIntent, changes(sigChange(loadM, "load(string, boolean): void", true)))).v, model.SeverityAct},
+		{"no container in a current footprint", view().mine(item(myItem, myIntent, refs(loadCall("")))).
+			peer(bob, item(bobItem, bobIntent, changes(sigChange(loadM, "load(string, boolean): void", true)))).v, ""},
 		{"suppressed by my need", callerView(cfgBreaking).need(me, model.Need{Key: cfg.Key, Name: cfg.Ref(), Item: myItem}).v, ""},
 		{"not suppressed by a need of my other item", callerView(cfgBreaking).need(me, model.Need{Key: cfg.Key, Item: myItem2}).v, model.SeverityAct},
 		{"I change it too", callerView(cfgBreaking, changes(bodyChange(cfg))).v, ""},

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/gitlet/internal/api"
 	"github.com/crewlet/gitlet/internal/bus"
 	"github.com/crewlet/gitlet/internal/config"
+	"github.com/crewlet/gitlet/internal/footprint"
 	"github.com/crewlet/gitlet/internal/model"
 	"github.com/crewlet/gitlet/internal/render"
 )
@@ -376,6 +378,62 @@ func TestTickOpensProvisionalItem(t *testing.T) {
 	if r.Outcome != api.OK || !r.Data.Adopted || r.Data.Item.ID != it.ID || r.Data.Item.Provisional || r.Data.NewBranch {
 		t.Errorf("start after a provisional item: %s %q %+v", r.Outcome, r.Summary, r.Data)
 	}
+}
+
+// Footprints an older gitlet stored on my items are computed again once
+// this one runs, though neither base nor head moved: an item waiting in
+// review keeps both for days, and its old refs carry no container.
+func TestOlderFootprintsAreRecomputed(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+
+	// A submitted item, and an active one with uncommitted work.
+	sub, _ := flowStart(t, ctx, ea, "Make Default use gitlet.json")
+	head := flowCommit(t, f.a, "default: use gitlet.json", "default.go", strings.Replace(mainGo, "gitlet.toml", "gitlet.json", 1))
+	flowLocked(ea, func() {
+		_, err := ea.mutateState(ctx, func(st *model.AgentState) error {
+			i := itemIndex(st.Items, sub)
+			st.Items[i].Status, st.Items[i].Head = model.ItemSubmitted, head
+			return nil
+		})
+		must(t, err)
+	})
+	act, _ := flowStart(t, ctx, ea, "Validate the configuration path")
+	writeFile(t, f.a, "config.go", strings.Replace(configGo, "func (c *Config) Validate() error {\n\treturn nil", "func (c *Config) Validate() error {\n\t_, err := Load(c.Path)\n\treturn err", 1))
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+
+	const sentinel = "storedByAnOlderGitlet"
+	flowLocked(ea, func() {
+		_, err := ea.mutateState(ctx, func(st *model.AgentState) error {
+			for _, id := range []model.ItemID{sub, act} {
+				fp := &st.Items[itemIndex(st.Items, id)].Footprint
+				if fp.Base == "" || fp.Version != footprint.Version || (id == sub && fp.Head != head) {
+					t.Fatalf("footprint of %s before the upgrade: base %q head %q version %d", id, fp.Base, fp.Head, fp.Version)
+				}
+				fp.Version = 0
+				fp.Refs = append(fp.Refs, model.Ref{Name: sentinel, Kind: model.RefCall, Lang: "go", Path: "default.go", Line: 1})
+			}
+			return nil
+		})
+		must(t, err)
+	})
+	must(t, ea.Close())
+
+	eb := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	clk.Advance(time.Minute)
+	must(t, eb.Tick(ctx))
+	flowLocked(eb, func() {
+		for _, id := range []model.ItemID{sub, act} {
+			_, it, _ := eb.findItem(id)
+			if it.Footprint.Version != footprint.Version || slices.ContainsFunc(it.Footprint.Refs, func(r model.Ref) bool { return r.Name == sentinel }) {
+				t.Errorf("%s item %s keeps the older footprint: version %d, refs %+v", it.Status, id, it.Footprint.Version, it.Footprint.Refs)
+			}
+		}
+	})
 }
 
 func TestStatusWhoWhy(t *testing.T) {

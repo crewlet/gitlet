@@ -9,15 +9,24 @@ import (
 	"github.com/crewlet/gitlet/internal/model"
 )
 
-// matchRef implements Match (docs/SPEC.md, section 9.6).
+// containerVersion is the footprint.Version from which resolved refs
+// record what their qualifier names (Ref.Container). In an older footprint
+// an empty Container says nothing, so its refs match by module alone, as
+// they did then.
+const containerVersion = 2
+
+// matchRef implements Match (docs/SPEC.md, section 9.6). version is the
+// Footprint.Version of the footprint ref comes from.
 //
 // A resolved ref matches when the language families and names agree, its
 // module is one of the symbol's modules, and it reaches the symbol's
 // container: a ref whose qualifier names a type (Ref.Container) reaches the
 // members of a type of that name, and any other resolved ref reaches only
-// what is not a type member. In Go, Python and Rust the symbol's module may
-// also end in "/" + the ref's module, for packages below the repository
-// root (a source root in a subdirectory, a GOPATH-style tree). An
+// what is not a type member. A ref from a footprint older than
+// containerVersion has no container to go by and skips that check. In Go,
+// Python and Rust the symbol's module may also end in "/" + the ref's
+// module, for packages below the repository root (a source root in a
+// subdirectory, a GOPATH-style tree). An
 // unresolved ref (its qualifier is a variable, receiver, self or this)
 // matches a member (method, field) by name only, when that name is unique.
 // In Go the symbol must be exported unless the ref is in its package. A
@@ -25,7 +34,7 @@ import (
 // constructor (constructed).
 // Qualifiers and modules arrive resolved by the footprint package; nothing
 // here resolves them again.
-func matchRef(ref model.Ref, sym model.Symbol, uniqueMethod bool) (match, resolved bool) {
+func matchRef(ref model.Ref, version int, sym model.Symbol, uniqueMethod bool) (match, resolved bool) {
 	if ref.Name != sym.Name {
 		class, ok := constructed(ref, sym)
 		if !ok {
@@ -49,7 +58,7 @@ func matchRef(ref model.Ref, sym model.Symbol, uniqueMethod bool) (match, resolv
 		if lastSegment(ref.Container) != lastSegment(sym.Container) {
 			return false, false
 		}
-	} else if typeMember(sym) {
+	} else if typeMember(sym) && version >= containerVersion {
 		return false, false
 	}
 	ok := moduleMatch(ref.Module, sym)

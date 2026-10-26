@@ -197,6 +197,7 @@ type Ref struct {
 type Footprint struct {
 	Base       string         `json:"base"`
 	Head       string         `json:"head"`
+	Version    int            `json:"version,omitempty"` // the footprint.Version that computed it; 0 before versions were recorded
 	Broad      bool           `json:"broad,omitempty"`
 	Files      []FileChange   `json:"files,omitempty"`
 	Symbols    []SymbolChange `json:"symbols,omitempty"`

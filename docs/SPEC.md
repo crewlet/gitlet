@@ -423,7 +423,7 @@ The server's instructions summarize the workflow in section 13.
  "items":[{"id":"8c1f0e2a9b3d","intent":"Add strict mode to config loading","provisional":false,
    "branch":"gitlet/add-strict-mode-8c1f","base":"<oid>","snapshot":"<oid>","head":"<oid>",
    "status":"active","pr":"","snapshotError":"","openedAt":"...","updatedAt":"...",
-   "footprint":{"base":"<oid>","head":"<oid>","broad":false,
+   "footprint":{"base":"<oid>","head":"<oid>","version":2,"broad":false,
      "files":[{"path":"src/config.ts","status":"M","lang":"typescript","parsed":true}],
      "symbols":[{"change":"signature","breaking":false,
         "oldSignature":"function parseConfig(string): Config","oldSigHash":"...",
@@ -539,6 +539,13 @@ A work item is one task on one branch in one worktree.
 For each item, the footprint compares its head (the latest snapshot for the
 active item, the branch head for a submitted one) against the merge base with
 main.
+
+A footprint records the version of the algorithm that computed it
+(`version`), which goes up whenever the same two commits could give another
+footprint. A footprint stored on my item by an older version is computed
+again even when its head and base stay, and cached footprints are keyed by
+version too. A footprint without a version comes from before refs recorded
+their container (section 9.6).
 
 ### 9.1 Snapshots
 
@@ -734,7 +741,10 @@ module or package, reaches only symbols that are not members of a type:
 not methods, Python class members, or Rust `impl` and trait items. A
 JavaScript named or default import used as a qualifier names a class when
 it is capitalized, and otherwise an exported object, whose members are
-taken for the module's own functions.
+taken for the module's own functions. The refs of a footprint older than
+version 2, which other agents' older gitlets still publish, carry no
+container whatever their qualifier named, so they reach every symbol of
+their name in their module, members included.
 
 Building an instance names the class, while its parameters belong to the
 constructor, a method of its own. So a resolved `new X(...)` in TypeScript
