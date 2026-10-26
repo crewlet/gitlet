@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -115,6 +117,7 @@ func commentPrefix(ctx context.Context, repo *gitx.Repo) string {
 // postCommit prints the agent's new act notes to stderr, where whoever ran
 // git commit sees them, and marks shown the notes it printed in full. The
 // rest, and every other new note, stay new for the next result or hook.
+// Commits git replays print nothing (see replayed).
 func (r *runner) postCommit(ctx context.Context) error {
 	dir, err := r.getwd()
 	if err != nil {
@@ -129,7 +132,10 @@ func (r *runner) postCommit(ctx context.Context) error {
 		return nil
 	}
 	acts, err := s.newNotes(ctx, model.SeverityAct)
-	if err != nil {
+	if err != nil || len(acts) == 0 {
+		return err
+	}
+	if replay, err := replayed(ctx, s.repo); err != nil || replay {
 		return err
 	}
 	text := strings.TrimRight(render.Notes(notesHeading, acts, render.CLI), "\n")
@@ -139,6 +145,51 @@ func (r *runner) postCommit(ctx context.Context) error {
 	fmt.Fprintln(r.stderr, text)
 	s.markShown(ctx, shownInFull(acts), r.now())
 	return nil
+}
+
+// maxReflogTail is how much of the end of HEAD's reflog replayed reads to
+// find its last entry.
+const maxReflogTail = 8 << 10
+
+// replayed reports whether the commit that ran post-commit was replayed by
+// a rebase, cherry-pick or revert rather than made with git commit.
+// gitlet's use and update replay commits with hooks enabled and swallow
+// their output on success, so notes printed there would reach nobody and
+// would no longer be new for the verb's result. A revert leaves no state
+// behind while its hooks run; the entry it wrote to HEAD's reflog just
+// before tells it apart. Without that reflog (it is off, or kept in a
+// reftable) a revert passes for a commit.
+func replayed(ctx context.Context, repo *gitx.Repo) (bool, error) {
+	switch op, err := repo.Operation(ctx); {
+	case err != nil:
+		return false, err
+	case op == "rebase" || op == "cherry-pick" || op == "revert":
+		return true, nil
+	}
+	f, err := os.Open(filepath.Join(repo.GitDir, "logs", "HEAD"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	off := max(fi.Size()-maxReflogTail, 0)
+	tail := make([]byte, fi.Size()-off)
+	if _, err := f.ReadAt(tail, off); err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	// An entry is "<old> <new> <ident> <time> <zone>\t<action>: <subject>",
+	// such as "commit (amend): ...", "cherry-pick: ..." or "rebase (pick): ...".
+	last := strings.TrimRight(string(tail), "\n")
+	last = last[strings.LastIndexByte(last, '\n')+1:]
+	_, msg, _ := strings.Cut(last, "\t")
+	action, _, _ := strings.Cut(msg, ":")
+	return action == "cherry-pick" || action == "revert" || strings.Contains(action, "rebase"), nil
 }
 
 // prePush prints, when the current branch belongs to an active item, the

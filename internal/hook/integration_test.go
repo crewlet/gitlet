@@ -494,6 +494,35 @@ func TestIntegrationPostCommit(t *testing.T) {
 	if stderr := commit("b.txt"); stderr != "" {
 		t.Fatalf("second post-commit printed %q", stderr)
 	}
+
+	// gitlet's use and update replay commits with git's hooks running:
+	// their output is swallowed, so a new act note must stay new for the
+	// verb's result instead of being marked shown there.
+	gitIn(t, f.root, nil, "switch", "-q", "-c", "stub", "main")
+	commit("stub.txt")
+	stub := gitIn(t, f.root, nil, "rev-parse", "HEAD")
+	gitIn(t, f.root, nil, "switch", "-q", testBranch)
+	fresh := manyNotes(1, model.SeverityAct)[0]
+	syncNotes(t, f.repo.CommonDir, actNote, infoNote, fresh)
+	ctx := context.Background()
+	for _, step := range []struct {
+		name string
+		run  func() (gitx.ApplyResult, error)
+	}{
+		{"cherry-pick", func() (gitx.ApplyResult, error) { return f.repo.CherryPick(ctx, stub) }},
+		{"revert", func() (gitx.ApplyResult, error) { return f.repo.Revert(ctx, "HEAD") }},
+		{"rebase", func() (gitx.ApplyResult, error) { return f.repo.Rebase(ctx, gitx.RebaseOptions{Upstream: "stub"}) }},
+	} {
+		if res, err := step.run(); err != nil || !res.OK {
+			t.Fatalf("%s: %+v, %v", step.name, res, err)
+		}
+		if st := statuses(t, f.repo.CommonDir)[fresh.ID]; st != ledger.NoteNew {
+			t.Fatalf("after gitlet's %s the new act note is %s, want new", step.name, st)
+		}
+	}
+	if stderr := commit("c.txt"); !strings.Contains(stderr, fresh.Title) {
+		t.Fatalf("post-commit after the replays printed %q", stderr)
+	}
 }
 
 func TestIntegrationPrePush(t *testing.T) {

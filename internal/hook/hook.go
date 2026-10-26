@@ -20,7 +20,8 @@ import (
 //	git prepare-commit-msg <file> [source] [sha]
 //	    adds Gitlet-Item and Gitlet-Agent trailers when the worktree has an item.
 //	git post-commit
-//	    prints new act notes to stderr.
+//	    prints new act notes to stderr, except for commits a rebase,
+//	    cherry-pick or revert replays.
 //	git pre-push <remote> <url>
 //	    prints the submit checks it can make offline to stderr.
 //	sequence-editor <todo-file>

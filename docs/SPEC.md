@@ -920,7 +920,9 @@ The skill (installed by `gitlet init`) and the MCP server instructions say:
 - **Git**: `gitlet hook git prepare-commit-msg|post-commit|pre-push`.
   `prepare-commit-msg` adds trailers, `post-commit` prints new act notes, and
   `pre-push` prints the `submit` checks it can make offline, so shell-only
-  agents see them in their output.
+  agents see them in their output. `post-commit` stays silent for commits a
+  rebase, cherry-pick or revert replays: `use` and `update` run those with
+  hooks on and drop their output, so the notes wait for the verb's result.
 - `gitlet hook sequence-editor <todo>` rewrites a rebase todo for `update`.
 
 ### 14.3 Setup
