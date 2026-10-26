@@ -55,7 +55,7 @@ func (e *Engine) doStart(ctx context.Context, in api.StartInput) (*api.Reply[api
 	intent := strings.Join(strings.Fields(in.Intent), " ")
 	if intent == "" {
 		return reply(refused("start needs your task in one sentence.", nil,
-			toolOption("state your task", "start", "intent", "<your task in one sentence>")), none), nil
+			toolOption("state your task in one sentence", "start")), none), nil
 	}
 	if e.readOnly() {
 		return reply(e.readOnlyRefusal("start"), none), nil
@@ -209,7 +209,7 @@ func (e *Engine) activeRefusal(it model.WorkItem) api.Result {
 	return refused(fmt.Sprintf("You already have an active task: %q on branch %s.", it.Intent, it.Branch),
 		[]string{"one active task per worktree: submit it or abandon it, then start again"},
 		toolOption("your work is ready: check it, push it and open a pull request", "submit"),
-		toolOption("stop that task (its branch is kept)", "abandon", "reason", "<why>"))
+		fillIn(toolOption("stop that task (its branch is kept)", "abandon"), "reason"))
 }
 
 // finishedBranchItem returns my item on branch that is no longer active

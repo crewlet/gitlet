@@ -759,6 +759,9 @@ func TestToolOption(t *testing.T) {
 	if o := toolOption("l", "status"); o.Args != nil {
 		t.Errorf("no args: %+v", o)
 	}
+	if o := fillIn(toolOption("l", "abandon", "item", "8c1f"), "reason"); !reflect.DeepEqual(o.Args, map[string]any{"item": "8c1f", "reason": ""}) {
+		t.Errorf("fillIn: %+v", o)
+	}
 }
 
 func TestTextHelpers(t *testing.T) {

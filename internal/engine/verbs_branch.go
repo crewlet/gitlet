@@ -1255,7 +1255,7 @@ func (e *Engine) doAbandon(ctx context.Context, in api.AbandonInput) (*api.Reply
 	reason := strings.Join(strings.Fields(in.Reason), " ")
 	if utf8.RuneCountInString(reason) > maxReasonLen {
 		return reply(refused(fmt.Sprintf("Keep the reason under %d characters.", maxReasonLen), nil,
-			toolOption("abandon it with a shorter reason", "abandon", "item", strings.TrimSpace(in.Item), "reason", "")), data), nil
+			fillIn(toolOption("abandon it with a shorter reason", "abandon", "item", strings.TrimSpace(in.Item)), "reason")), data), nil
 	}
 	if e.readOnly() {
 		return reply(e.readOnlyRefusal("abandon"), data), nil

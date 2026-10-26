@@ -185,7 +185,7 @@ func (e *Engine) resolveSymbol(ctx context.Context, verb, arg string, extra ...a
 	q, err := parseSymbolArg(arg, isPath)
 	if err != nil {
 		r := refused(fmt.Sprintf("Cannot %s %q: %v.", verb, strings.TrimSpace(arg), err), nil,
-			toolOption("name the symbol as path:Qualified", verb, append([]any{"symbol", "<path:Qualified>"}, extra...)...))
+			toolOption("name the symbol as path:Qualified", verb, extra...))
 		return model.Symbol{}, &r, nil
 	}
 	mine, theirs := e.footprintSymbols()
@@ -504,7 +504,7 @@ func (e *Engine) resolveTarget(ctx context.Context, verb, arg string, allowLine 
 			example = "src/config.ts, src/config.ts:42 or src/config.ts:parseConfig"
 		}
 		r := refused(fmt.Sprintf("Cannot %s %q: %v.", verb, strings.TrimSpace(arg), err), []string{"targets look like " + example},
-			toolOption("name a file or symbol", verb, "target", "<path or path:Qualified>"))
+			toolOption("name a file or symbol", verb))
 		return target{}, &r, nil
 	}
 	if t.Kind != targetSymbol {

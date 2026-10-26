@@ -99,8 +99,9 @@ func ifcRemoteOutbox(t *testing.T, f *fixture, agent model.AgentID) model.Outbox
 }
 
 // ifcRefused checks a refusal: it says so, and every option is an exact
-// call (a verb of api.Verbs with its own argument names and real values)
-// or a shell command.
+// call (a verb of api.Verbs with its own argument names and real values,
+// or "" for text the agent writes, which render shows as "...") or a shell
+// command.
 func ifcRefused(t *testing.T, what string, r api.Result) {
 	t.Helper()
 	if r.Outcome != api.Refused {
@@ -123,7 +124,7 @@ func ifcRefused(t *testing.T, what string, r api.Result) {
 			for _, a := range v.Args {
 				known = known || a.Name == name
 			}
-			if s := fmt.Sprint(val); !known || s == "" || strings.Contains(s, "<") {
+			if s := fmt.Sprint(val); !known || strings.Contains(s, "<") {
 				t.Errorf("%s: option %+v has argument %s=%q", what, o, name, s)
 			}
 		}

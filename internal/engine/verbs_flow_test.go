@@ -380,6 +380,47 @@ func TestFlowProposalOf(t *testing.T) {
 	}
 }
 
+// ---- options ----
+
+// Options with text for the agent to write show the "..." placeholder the
+// skill tells agents to fill in, never a value such as "<why>" that works
+// only when rewritten.
+func TestFlowOptionsMarkWhatToFillIn(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	ea := openEngine(t, Options{Dir: f.a})
+	check := func(what string, r api.Result, want string) {
+		t.Helper()
+		ifcRefused(t, what, r)
+		if text := render.Text(&r, render.MCP); !strings.Contains(text, "\n- "+want+" ") {
+			t.Errorf("%s: no option %s in:\n%s", what, want, text)
+		}
+	}
+
+	st, err := ea.Start(ctx, api.StartInput{Intent: " "})
+	must(t, err)
+	check("start without a task", st.Result, `start intent="..."`)
+	flowStart(t, ctx, ea, "Add a strict flag to Load")
+	st, err = ea.Start(ctx, api.StartInput{Intent: "Something else"})
+	must(t, err)
+	check("start while a task is active", st.Result, `abandon reason="..."`)
+
+	cl, err := ea.Claim(ctx, api.ClaimInput{Symbol: "two words", Note: "n-abcd1234"})
+	must(t, err)
+	check("claim a malformed symbol", cl.Result, `claim symbol="..." note="n-abcd1234"`)
+	who, err := ea.Who(ctx, api.WhoInput{Target: "two words"})
+	must(t, err)
+	check("who a malformed symbol", who.Result, `who target="..."`)
+	why, err := ea.Why(ctx, api.WhyInput{Target: "config.go:0"})
+	must(t, err)
+	check("why a bad line", why.Result, `why target="..."`)
+
+	ab, err := ea.Abandon(ctx, api.AbandonInput{Reason: strings.Repeat("too long ", maxReasonLen)})
+	must(t, err)
+	check("abandon with a long reason", ab.Result, `abandon reason="..."`)
+}
+
 // ---- discuss, accept, dismiss ----
 
 func TestFlowDiscussAndAccept(t *testing.T) {

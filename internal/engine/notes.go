@@ -367,6 +367,20 @@ func toolOption(label, tool string, kv ...any) model.Option {
 	return o
 }
 
+// fillIn adds arguments the agent writes itself to an option; render shows
+// each as the "..." placeholder. A required argument left out shows that
+// way already; an optional one needs fillIn, since toolOption leaves out
+// empty values.
+func fillIn(o model.Option, names ...string) model.Option {
+	if o.Args == nil {
+		o.Args = map[string]any{}
+	}
+	for _, n := range names {
+		o.Args[n] = ""
+	}
+	return o
+}
+
 // cmdOption is an option running a shell command.
 func cmdOption(label, command string) model.Option {
 	return model.Option{Label: label, Command: command}
