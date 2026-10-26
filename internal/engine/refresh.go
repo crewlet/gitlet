@@ -257,10 +257,10 @@ func (e *Engine) reload(ctx context.Context) error {
 
 // observe records a full refresh of the refs namespace at fetchedAt in the
 // ledger (docs/SPEC.md, section 8): refs keep their first-seen time while
-// their oid stays, and the last fetch time advances. After a gap of more
-// than three poll intervals since the last fetch (the machine slept, or the
-// remote was away) every first-seen time restarts first, so lapses are only
-// ever judged on time this clone actually watched.
+// their oid stays, and the last fetch time advances. After a gap since the
+// last fetch longer than fetchGapReset (the machine slept, or the remote
+// was away) every first-seen time restarts first, so lapses are never
+// judged on renewals an outage held back.
 func (e *Engine) observe(ctx context.Context, fetchedAt time.Time) {
 	// Re-read: another process of this clone may have observed meanwhile.
 	prev, err := e.led.Observed(ctx, refsNamespace)
@@ -272,7 +272,7 @@ func (e *Engine) observe(ctx context.Context, fetchedAt time.Time) {
 	if !fetchedAt.After(prev.LastFetch) || e.led.ReadOnly() {
 		return
 	}
-	if !prev.LastFetch.IsZero() && fetchedAt.Sub(prev.LastFetch) > 3*e.cfg.PollInterval {
+	if !prev.LastFetch.IsZero() && fetchedAt.Sub(prev.LastFetch) > fetchGapReset(e.cfg.PollInterval, e.cfg.Lease) {
 		if err := e.led.ResetFirstSeen(ctx, fetchedAt); err != nil {
 			e.log.Debug("reset first seen", "err", err)
 		}
@@ -287,6 +287,17 @@ func (e *Engine) observe(ctx context.Context, fetchedAt time.Time) {
 		return
 	}
 	e.obs, e.obsLoaded = obs, true
+}
+
+// fetchGapReset is the longest gap between two successful fetches of the
+// clone across which first-seen times stand. A peer renews once a third of
+// its lease has passed, so a renewal an outage held back can make its ref
+// look lapsed only when the outage nears two thirds of the lease; a third
+// leaves room for the peer's flush. Shorter gaps (a blip, a long verb, CLI
+// calls minutes apart) keep the history. Never less than three poll
+// intervals.
+func fetchGapReset(poll, lease time.Duration) time.Duration {
+	return max(3*poll, lease/3)
 }
 
 // observation returns the ref observations, loading them from the ledger

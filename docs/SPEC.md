@@ -491,7 +491,13 @@ A work item is one task on one branch in one worktree.
   it first saw the current oid, and the time of its last successful fetch. A
   ref has lapsed when `lastFetch - firstSeen >= lease` and the last fetch is
   within one poll interval of now. After a gap between ticks of more than
-  three poll intervals (the machine slept), first-seen times reset to now.
+  three poll intervals (the machine slept), first-seen times reset to now;
+  the gap runs on the wall clock from the end of one tick to the start of
+  the next, so a tick that waited for a long verb is no gap. They also reset
+  after a gap between successful fetches of more than a third of the lease,
+  or three poll intervals when longer (the remote was away, and peers'
+  renewals may have been held back too); a shorter outage cannot make a
+  renewing ref look lapsed.
   First-seen times are only updated by a full refresh, and only within the
   namespace it fetched. Clock skew between machines never matters.
 - A takeover names the exact oid judged lapsed. The old owner's next write is

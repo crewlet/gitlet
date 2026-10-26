@@ -946,6 +946,88 @@ func TestIdlePeerLapses(t *testing.T) {
 	}
 }
 
+func TestLapsesSurviveALongVerbAndABlip(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	cfg := testConfig()
+	cfg.Lease = 3 * time.Minute
+	ea := openEngine(t, Options{Dir: f.a, Config: cfg})
+	eb := openEngine(t, Options{Dir: f.b, Config: cfg, Now: clk.Now})
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Rework config loading"})
+	must(t, err)
+	if r.Outcome != api.OK {
+		t.Fatalf("start: %q", r.Summary)
+	}
+	// idle returns since when b judges a lapsed, or nil.
+	idle := func() *time.Time {
+		t.Helper()
+		var since *time.Time
+		flowLocked(eb, func() {
+			if p := eb.peers(ctx, eb.now())[ea.Agent().ID]; p.Lapsed {
+				since = p.IdleSince
+			}
+		})
+		return since
+	}
+	must(t, eb.Tick(ctx))
+	for range 16 {
+		clk.Advance(13 * time.Second)
+		must(t, eb.Tick(ctx))
+	}
+	first := idle()
+	if first == nil {
+		t.Fatalf("a has not lapsed after %v of silence", 16*13*time.Second)
+	}
+
+	// A tick fetches, then waits 45s for a verb that holds the engine: the
+	// next tick comes right after, so that is no gap between ticks.
+	before, _ := eb.poll.snapshot()
+	clk.Advance(13 * time.Second)
+	eb.mu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- eb.Tick(ctx) }()
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if last, _ := eb.poll.snapshot(); last.After(before) {
+			break
+		}
+		if time.Now().After(deadline) {
+			eb.mu.Unlock()
+			t.Fatal("the tick did not fetch")
+		}
+	}
+	clk.Advance(45 * time.Second)
+	eb.mu.Unlock()
+	must(t, <-done)
+	clk.Advance(5 * time.Second)
+	must(t, eb.Tick(ctx))
+	if since := idle(); since == nil || !since.Equal(*first) {
+		t.Errorf("after a long verb, a is idle since %v, want %v", since, first)
+	}
+
+	// The remote is away for one poll: too short to hold back a renewal.
+	away := f.remote + ".away"
+	must(t, os.Rename(f.remote, away))
+	clk.Advance(13 * time.Second)
+	must(t, eb.Tick(ctx))
+	must(t, os.Rename(away, f.remote))
+	for range 2 {
+		clk.Advance(13 * time.Second)
+		must(t, eb.Tick(ctx))
+	}
+	if since := idle(); since == nil || !since.Equal(*first) {
+		t.Errorf("after a blip, a is idle since %v, want %v", since, first)
+	}
+
+	// After b slept, time nobody watched does not count.
+	clk.Advance(time.Hour)
+	must(t, eb.Tick(ctx))
+	if since := idle(); since != nil {
+		t.Errorf("a is judged on time b slept through: idle since %v", since)
+	}
+}
+
 func TestReapJudgesAStateItCannotRead(t *testing.T) {
 	requireDeps(t)
 	f := newFixture(t)

@@ -55,11 +55,15 @@ func (e *Engine) tick(ctx context.Context) error {
 	}
 	lctx, cancel := context.WithTimeout(ctx, tickBudget)
 	defer cancel()
-	if !e.lastTick.IsZero() && now.Sub(e.lastTick) > 3*e.cfg.PollInterval && !e.led.ReadOnly() {
+	// The gap between ticks runs from the end of the last one to the start
+	// of this one, on the wall clock: a tick that waited for a long verb or
+	// a slow fetch was not a gap, and Go's monotonic clock stops while the
+	// machine sleeps.
+	if !e.lastTick.IsZero() && now.Round(0).Sub(e.lastTick) > 3*e.cfg.PollInterval && !e.led.ReadOnly() {
 		// The machine slept: time nobody watched must not count toward lapses.
 		keep(e.led.ResetFirstSeen(lctx, now))
 	}
-	e.lastTick = now
+	defer func() { e.lastTick = e.now().Round(0) }()
 
 	before := e.loadedFP
 	switch {
