@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,9 @@ const (
 	alreadyDoneScan   = 200
 	// maxDetailNames caps names listed inside one detail.
 	maxDetailNames = 3
+	// reflogScan caps the reflog entries of a closed item's branch searched
+	// for the commit it had when the item closed.
+	reflogScan = 100
 )
 
 var errActiveExists = errors.New("engine: an active item exists")
@@ -254,11 +259,15 @@ func (e *Engine) finishedBranchItem(ctx context.Context, branch string) (finishe
 }
 
 // holdsClosed reports whether branch still holds the work of an item that
-// closed with the branch at head: the branch is at head, or builds on head
-// while main does not contain it. Once main contains head (the item landed
-// by a merge or a fast-forward), a branch made again from main contains it
-// too, and commits on top of it no longer feed anything main lacks, so only
-// head itself counts.
+// closed with the branch at head: the branch is at head or, while main does
+// not contain head, builds on it, holds one of the item's commits main
+// lacks as it is or by patch (holdsCommitOf), or was rewritten in place
+// since it was at head (rewrittenSince), so an amend or a rebase does not
+// turn it into another branch. A branch made again for other work, deleted
+// and created anew or reset onto main, does none of these. Once main
+// contains head (the item landed by a merge or a fast-forward), a branch
+// made again from main contains it too, and commits on top of it no longer
+// feed anything main lacks, so only head itself counts.
 func (e *Engine) holdsClosed(ctx context.Context, branch, head string) bool {
 	tip, err := e.bg.RevParse(ctx, "refs/heads/"+branch)
 	if err != nil {
@@ -267,15 +276,73 @@ func (e *Engine) holdsClosed(ctx context.Context, branch, head string) bool {
 	if tip == head {
 		return true
 	}
-	if ok, err := e.bg.IsAncestor(ctx, head, tip); err != nil || !ok {
-		return false // the branch was made again for other work
-	}
 	main := e.mainOID(ctx)
+	if main != "" {
+		if inMain, err := e.bg.IsAncestor(ctx, head, main); err == nil && inMain {
+			return false
+		}
+	}
+	builds, err := e.bg.IsAncestor(ctx, head, tip)
+	if err != nil {
+		return false
+	}
+	return builds || e.holdsCommitOf(ctx, tip, head, main) || e.rewrittenSince(ctx, branch, head, main)
+}
+
+// holdsCommitOf reports whether tip holds one of the commits head has and
+// main lacks, as it is or by patch (cherry-picked, or rebased onto another
+// base): fewer of those commits remain once the ones tip holds are left
+// out.
+func (e *Engine) holdsCommitOf(ctx context.Context, tip, head, main string) bool {
+	count := func(args ...string) int {
+		args = append([]string{"rev-list", "--count", "--no-merges"}, args...)
+		if main != "" {
+			args = append(args, "^"+main)
+		}
+		out, err := e.bg.Run(ctx, append(args, "--")...)
+		if err != nil {
+			return -1
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(out))
+		if err != nil {
+			return -1
+		}
+		return n
+	}
+	lacking := count("--cherry-pick", "--right-only", tip+"..."+head)
+	return lacking >= 0 && lacking < count(head)
+}
+
+// rewrittenSince reports whether branch was rewritten in place (amended,
+// rebased, reset) since it was at head rather than made again: its reflog,
+// which goes with the branch when it is deleted, has head, and no later
+// entry is a commit main contains, which resetting the branch onto main for
+// other work (git switch -C) would leave.
+func (e *Engine) rewrittenSince(ctx context.Context, branch, head, main string) bool {
+	out, err := e.bg.Run(ctx, "log", "-g", "--no-show-signature", "--format=%H", "-n", strconv.Itoa(reflogScan), "refs/heads/"+branch, "--")
+	if err != nil {
+		return false
+	}
+	entries := strings.Fields(out) // newest first
+	i := slices.Index(entries, head)
+	if i < 0 {
+		return false
+	}
 	if main == "" {
 		return true
 	}
-	inMain, err := e.bg.IsAncestor(ctx, head, main)
-	return err != nil || !inMain
+	// rev-list lists each later entry, unless main contains it.
+	out, err = e.bg.Run(ctx, append(append([]string{"rev-list"}, entries[:i]...), "^"+main, "--")...)
+	if err != nil {
+		return false
+	}
+	listed := strings.Fields(out)
+	for _, oid := range entries[:i] {
+		if !slices.Contains(listed, oid) {
+			return false
+		}
+	}
+	return true
 }
 
 // finishedBranch is what the ledger remembers about a closed item's branch.
@@ -352,18 +419,19 @@ func (e *Engine) carryRefusal(ctx context.Context, left model.WorkItem, from, in
 // made after the item closed: they are new work, not the item's, and a new
 // branch from main would leave them behind on the old one, while start
 // rewrites no commits. Commits main has, merged in to keep the branch up to
-// date, and merges are no such work. It offers to move the commits, named
-// one by one, onto the new branch name from main, or to keep them on top of
-// the item's commits on that name. A submitted item's later commits are its
-// review fixes and stay with it.
+// date, merges, and the item's own commits rewritten by an amend or a
+// rebase (the same patch) are no such work. It offers to move the commits,
+// named one by one, onto the new branch name from main, or to keep them on
+// top of the item's commits on that name. A submitted item's later commits
+// are its review fixes and stay with it.
 func (e *Engine) leftBehindRefusal(ctx context.Context, left finishedBranch, cur, name, from, intent string) (*api.Result, error) {
 	if left.Head == "" {
 		return nil, nil
 	}
 	// %h is git's unique abbreviation: the command stays short enough to
 	// show in full however many commits it names.
-	out, err := e.bg.Run(ctx, "log", "--no-show-signature", "--no-merges", "--topo-order", "--reverse", "--format=%H %h %s",
-		"HEAD", "^"+left.Head, "^"+from, "--")
+	out, err := e.bg.Run(ctx, "log", "--no-show-signature", "--no-merges", "--cherry-pick", "--left-only", "--topo-order", "--reverse",
+		"--format=%H %h %s", "HEAD..."+left.Head, "^"+from, "--")
 	if err != nil {
 		return nil, fmt.Errorf("engine: start: %w", err)
 	}

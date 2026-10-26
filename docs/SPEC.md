@@ -467,19 +467,24 @@ A work item is one task on one branch in one worktree.
   creates the new branch the same way but from main, not HEAD, so the new
   task neither builds on that item's commits nor pushes into its PR. A
   closed item's branch is its own while the branch is at the commit it had
-  when the item closed, or builds on that commit while main does not
-  contain it; the ledger records that commit, so this holds after the item
-  leaves my state. A branch made again under the same name, from main or
-  elsewhere, is ordinary. A provisional item never makes a branch its own,
-  even once abandoned: gitlet opened it for the branch the agent was
-  already on.
+  when the item closed or, while main does not contain that commit, builds
+  on it, holds one of the item's commits main lacks as it is or by patch
+  (cherry-picked, rebased), or was rewritten in place since (amended,
+  rebased, reset): the branch's reflog has that commit and no later entry
+  at a commit main contains. The ledger records that commit, so this holds
+  after the item leaves my state. A branch made again under the same name,
+  deleted and created anew from main or elsewhere, or reset onto main
+  (`git switch -C`), is ordinary. A provisional item never makes a branch
+  its own, even once abandoned: gitlet opened it for the branch the agent
+  was already on.
   Uncommitted changes that main's version of their files would overwrite are
   refused, with `git stash` as the way out. So are commits made on a closed
-  item's branch after it closed, merges and commits main has aside: they are
-  new work, not the item's, which a new branch from main would leave behind,
-  and `start` rewrites no commits. The refusal offers to cherry-pick them,
-  named one by one, onto the new branch from main, or to keep them on top of
-  the item's commits on a new branch. Its result lists:
+  item's branch after it closed, aside from merges, commits main has and the
+  item's own commits rewritten with the same patch: they are new work, not
+  the item's, which a new branch from main would leave behind, and `start`
+  rewrites no commits. The refusal offers to cherry-pick them, named one by
+  one, onto the new branch from main, or to keep them on top of the item's
+  commits on a new branch. Its result lists:
   - active items with similar intent (section 10.2),
   - items and claims touching `paths`,
   - commits on main from the last 7 days with similar subjects ("already

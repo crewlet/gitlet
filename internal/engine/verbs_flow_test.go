@@ -1565,6 +1565,136 @@ func TestFlowStartStaysOnABranchRemadeAfterAMerge(t *testing.T) {
 	}
 }
 
+// A closed task's branch amended or rebased in place is still that task's,
+// in my state or only in the ledger: start leaves it, and refuses only for
+// a commit that is no longer one of the task's by patch. The same name reset
+// onto main for other work is a branch like any other.
+func TestFlowStartLeavesAFinishedBranchRewrittenInPlace(t *testing.T) {
+	requireDeps(t)
+	rebase := func(t *testing.T, f *fixture) {
+		flowMoveMain(t, f, "readme: peer", "README.md", "# demo\n\npeer\n")
+		runGit(t, f.a, "fetch", "-q", "origin")
+		runGit(t, f.a, "rebase", "-q", "origin/main")
+	}
+	for _, tc := range []struct {
+		name    string
+		trimmed bool // the task left my state first
+		rewrite func(t *testing.T, f *fixture)
+		want    string // leave, refuse or stay
+	}{
+		{"amended", false, func(t *testing.T, f *fixture) {
+			runGit(t, f.a, "commit", "-q", "--amend", "-m", "default: rename the configuration file")
+		}, "leave"},
+		{"rebased", false, rebase, "leave"},
+		{"rebased after cleanup", true, rebase, "leave"},
+		{"rebased with its reflog expired", false, func(t *testing.T, f *fixture) {
+			runGit(t, f.a, "reflog", "expire", "--expire=now", "--all")
+			rebase(t, f)
+		}, "leave"},
+		{"amended with more changes", false, func(t *testing.T, f *fixture) {
+			writeFile(t, f.a, "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.json", 1))
+			runGit(t, f.a, "commit", "-q", "-a", "--amend", "--no-edit")
+		}, "refuse"},
+		{"reset onto main for other work", false, func(t *testing.T, f *fixture) {
+			runGit(t, f.a, "switch", "-q", "-C", runGit(t, f.a, "branch", "--show-current"), "origin/main")
+			flowCommit(t, f.a, "readme: other work", "README.md", "# demo\n\nOther work.\n")
+		}, "stay"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			ctx := ctxT(t)
+			clk := newClock()
+			ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+
+			task, old := flowStart(t, ctx, ea, "Rename the default configuration file")
+			flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+			ab, err := ea.Abandon(ctx, api.AbandonInput{})
+			must(t, err)
+			flowWant(t, "abandon", ab.Result, api.OK)
+			if tc.trimmed {
+				clk.Advance(closedRetention + time.Hour)
+				runGit(t, f.a, "switch", "-q", "main")
+				flowStart(t, ctx, ea, "Document the configuration")
+				_, err := ea.Abandon(ctx, api.AbandonInput{})
+				must(t, err)
+				flowLocked(ea, func() {
+					if _, it, ok := ea.findItem(task); ok {
+						t.Fatalf("the abandoned task is still in state: %+v", it)
+					}
+				})
+				runGit(t, f.a, "switch", "-q", old)
+			}
+			tc.rewrite(t, f)
+			tip := runGit(t, f.a, "rev-parse", "HEAD")
+
+			clk.Advance(time.Minute)
+			r, err := ea.Start(ctx, api.StartInput{Intent: "Read the configuration from the environment"})
+			must(t, err)
+			head, main := runGit(t, f.a, "rev-parse", "HEAD"), runGit(t, f.a, "rev-parse", "origin/main")
+			switch tc.want {
+			case "leave":
+				flowWant(t, "start", r.Result, api.OK)
+				if !r.Data.NewBranch || r.Data.Branch == old || head != main {
+					t.Errorf("start on %s: branch %q (new %v) at %s, want a new branch at main %s", old, r.Data.Branch, r.Data.NewBranch, head, main)
+				}
+			case "refuse":
+				flowWant(t, "start", r.Result, api.Refused)
+				if !slices.ContainsFunc(r.Details, func(d string) bool { return strings.Contains(d, shortOID(tip)) }) || head != tip {
+					t.Errorf("refusal on %s at %s, want it to name %s: %v", old, head, shortOID(tip), r.Details)
+				}
+			case "stay":
+				flowWant(t, "start", r.Result, api.OK)
+				if r.Data.NewBranch || r.Data.Branch != old || head != tip {
+					t.Errorf("start on %s: branch %q (new %v) at %s, want to stay at %s", old, r.Data.Branch, r.Data.NewBranch, head, tip)
+				}
+			}
+		})
+	}
+}
+
+// An abandoned task's pull request stays open: a new task on its branch,
+// rebased onto main since, would be pushed into it.
+func TestFlowStartLeavesTheRebasedBranchOfAnAbandonedPullRequest(t *testing.T) {
+	requireDeps(t)
+	flowFakeGh(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+
+	_, old := flowStart(t, ctx, ea, "Rename the default configuration file")
+	submitted := flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+	sr, err := ea.Submit(ctx, api.SubmitInput{})
+	must(t, err)
+	flowWant(t, "submit", sr.Result, api.OK)
+	clk.Advance(time.Minute)
+	ab, err := ea.Abandon(ctx, api.AbandonInput{Reason: "not wanted"})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+
+	flowMoveMain(t, f, "readme: peer", "README.md", "# demo\n\npeer\n")
+	runGit(t, f.a, "fetch", "-q", "origin")
+	runGit(t, f.a, "rebase", "-q", "origin/main")
+	clk.Advance(time.Minute)
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Read the configuration from the environment"})
+	must(t, err)
+	flowWant(t, "start on the rebased branch", r.Result, api.OK)
+	if !r.Data.NewBranch || r.Data.Branch == old {
+		t.Fatalf("start on the rebased %s: branch %q (new %v)", old, r.Data.Branch, r.Data.NewBranch)
+	}
+	flowCommit(t, f.a, "config: read from env", "config.go", strings.Replace(configGo, "Strict bool", "Strict bool\n\tEnv    bool", 1))
+	clk.Advance(time.Minute)
+	s2, err := ea.Submit(ctx, api.SubmitInput{})
+	must(t, err)
+	flowWant(t, "submit the new task", s2.Result, api.OK)
+	if got := runGit(t, f.remote, "rev-parse", "refs/heads/"+old); got != submitted {
+		t.Errorf("the abandoned pull request's branch %s moved to %s, want %s", old, got, submitted)
+	}
+	if got := runGit(t, f.remote, "log", "--format=%s", "main..refs/heads/"+r.Data.Branch); got != "config: read from env" {
+		t.Errorf("%s holds %q on top of main, want only the new task's commit", r.Data.Branch, got)
+	}
+}
+
 // Work on a finished task's branch opens no provisional item, and a
 // provisional item that followed the worktree there does not keep start
 // there either, after the task has left my state too.
