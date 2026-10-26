@@ -74,3 +74,34 @@ func TestBodyHashFormatting(t *testing.T) {
 		})
 	}
 }
+
+// TestSyntaxErrors checks that a file tree-sitter had to recover is marked,
+// since its definitions may be missing or cut short.
+func TestSyntaxErrors(t *testing.T) {
+	tests := []struct {
+		name, path, src string
+		want            bool
+	}{
+		{"go", "a.go", "package a\n\nfunc A(x int) int {\n\tif x > 0 {\n\t\treturn x\n\t}\n\treturn 0\n}\n", false},
+		{"go unclosed block", "a.go", "package a\n\nfunc A(x int) int {\n\tif x > 0 {\n\t\treturn x\n}\n\nfunc B() {}\n", true},
+		{"typescript", "a.ts", "export function a(x: number) {\n  if (x) {\n    return 1;\n  }\n}\n", false},
+		{"typescript unclosed block", "a.ts", "export function a(x: number) {\n  if (x) {\n    return 1;\n}\n\nexport function b() {}\n", true},
+		{"tsx", "a.tsx", "export const A = () => <div>{x}</div>;\n", false},
+		{"javascript missing paren", "a.js", "function a() {\n  return f(1;\n}\n", true},
+		{"python", "a.py", "def a(x):\n    return f(x)\n", false},
+		{"python unclosed paren", "a.py", "def a(x):\n    return f(x\n\ndef b():\n    pass\n", true},
+		{"rust", "a.rs", "pub fn a() -> u8 {\n    1\n}\n", false},
+		{"rust unclosed block", "a.rs", "pub fn a() -> u8 {\n    if x {\n        1\n}\n\npub fn b() {}\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := Extract(tt.path, []byte(tt.src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.SyntaxErrors != tt.want {
+				t.Errorf("SyntaxErrors = %v, want %v", f.SyntaxErrors, tt.want)
+			}
+		})
+	}
+}

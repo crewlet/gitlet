@@ -88,7 +88,7 @@ func (c *ctx) releases() []Release {
 			reason = "its item was abandoned"
 		case cv.Landed:
 			reason = "its contract landed on main"
-		case known && cv.Claim.Auto && cv.Claim.Contract == nil && !c.stillChanges(cv.Claim.Item, k):
+		case known && cv.Claim.Auto && cv.Claim.Contract == nil && !c.stillChanges(cv.Claim.Item, k, cv.Claim.Symbol):
 			reason = "automatic claim, and your work no longer changes its signature"
 		}
 		if reason != "" {
@@ -98,12 +98,21 @@ func (c *ctx) releases() []Release {
 	return out
 }
 
-// stillChanges reports whether my item changes the signature of key.
-func (c *ctx) stillChanges(item model.ItemID, key string) bool {
+// stillChanges reports whether my item changes the signature of key, or may
+// still: a claimed symbol's file that my footprint tracks at file level only,
+// as one that does not parse mid-edit, tells nothing about its symbols.
+func (c *ctx) stillChanges(item model.ItemID, key string, sym model.Symbol) bool {
 	e := c.byItem[item]
 	if e == nil || !e.mine {
 		return false
 	}
-	ch, ok := e.changes[key]
-	return ok && ch.SignatureChanging()
+	if ch, ok := e.changes[key]; ok && ch.SignatureChanging() {
+		return true
+	}
+	for _, f := range e.item.Footprint.Files {
+		if !f.Parsed && sym.Path != "" && f.Path == sym.Path {
+			return true
+		}
+	}
+	return false
 }

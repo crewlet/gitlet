@@ -67,6 +67,12 @@ func TestReleases(t *testing.T) {
 		{"automatic, no contract, no longer changed", view().mine(item(myItem, myIntent, changes(bodyChange(cfg)))).
 			claim(cfg.Key, me, myItem, 0, autoClaim()), "automatic"},
 		{"automatic, still changed", view().mine(item(myItem, myIntent, changes(cfgBreaking))).claim(cfg.Key, me, myItem, 0, autoClaim()), ""},
+		// A file mid-edit that does not parse is tracked at file level: that
+		// says nothing about whether its symbols still change.
+		{"automatic, its file tracked at file level", view().mine(item(myItem, myIntent, files(unparsed(cfg.Path)))).
+			claim(cfg.Key, me, myItem, 0, autoClaim(), withSymbol(cfg)), ""},
+		{"automatic, another file tracked at file level", view().mine(item(myItem, myIntent, files(unparsed("src/other.ts")))).
+			claim(cfg.Key, me, myItem, 0, autoClaim(), withSymbol(cfg)), "automatic"},
 		{"automatic with a contract", view().mine(item(myItem, myIntent)).
 			claim(cfg.Key, me, myItem, 0, autoClaim(), withContract("x")), ""},
 		{"manual, no longer changed", view().mine(item(myItem, myIntent)).claim(cfg.Key, me, myItem, 0), ""},

@@ -41,6 +41,11 @@ type File struct {
 	Symbols []model.Symbol // every definition, nested ones included, sorted by StartByte
 	Refs    []model.Ref    // every reference in the file, unresolved (Module "" and Resolved false), sorted by line
 	Imports []Import       // sorted by line
+	// SyntaxErrors is set when tree-sitter had to recover from syntax
+	// errors. Recovery can swallow or drop the definitions after an error,
+	// such as everything below an unclosed brace, so Symbols may be
+	// incomplete.
+	SyntaxErrors bool
 }
 
 // LangForPath returns gitlet's language name for a path ("go", "typescript",

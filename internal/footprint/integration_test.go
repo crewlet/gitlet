@@ -3,6 +3,7 @@ package footprint
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/gitlet/internal/gitx"
@@ -20,7 +21,21 @@ type change struct {
 	base, head            string
 }
 
+// computeReal runs Compute with the real extractors and expects every
+// changed file in a supported language to be parsed.
 func computeReal(t *testing.T, goModule string, changes ...change) Result {
+	t.Helper()
+	res := computeExtracted(t, goModule, changes...)
+	for _, f := range res.Footprint.Files {
+		if symbols.Supported(f.Path) && !f.Parsed {
+			t.Errorf("%s was not parsed", f.Path)
+		}
+	}
+	return res
+}
+
+// computeExtracted runs Compute with the real extractors.
+func computeExtracted(t *testing.T, goModule string, changes ...change) Result {
 	t.Helper()
 	r := newRepo()
 	for _, c := range changes {
@@ -40,11 +55,6 @@ func computeReal(t *testing.T, goModule string, changes ...change) Result {
 		Options{Extract: symbols.Extract, GoModule: goModule, Now: testNow})
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, f := range res.Footprint.Files {
-		if symbols.Supported(f.Path) && !f.Parsed {
-			t.Errorf("%s was not parsed", f.Path)
-		}
 	}
 	return res
 }
@@ -193,4 +203,53 @@ func TestIntegrationGo(t *testing.T) {
 			t.Errorf("refs = %q", got)
 		}
 	})
+}
+
+// TestIntegrationSyntaxErrors checks that a half-written edit, which
+// tree-sitter recovers from by swallowing or dropping the definitions after
+// it, never reads as removed symbols: the file is tracked at file level until
+// it parses again.
+func TestIntegrationSyntaxErrors(t *testing.T) {
+	const goLib = "package lib\n\nfunc A(x int) int {\n\tif x > 0 {\n\t\treturn x\n\t}\n\treturn 0\n}\n\n" +
+		"func B(s string) string {\n\treturn s\n}\n\ntype C struct{}\n\nfunc (C) M() {}\n"
+	const tsLib = "export function a(x: number): number {\n  if (x > 0) {\n    return x;\n  }\n  return 0;\n}\n\n" +
+		"export function b(s: string): string {\n  return s;\n}\n\nexport class C {\n  m(): void {}\n}\n"
+	const pyLib = "def a(x):\n    return f(x)\n\n\ndef b(s):\n    return s\n\n\nclass C:\n    def m(self):\n        pass\n"
+	const rsLib = "pub fn a(x: u8) -> u8 {\n    if x > 0 {\n        return x;\n    }\n    0\n}\n\n" +
+		"pub fn b(s: &str) -> &str {\n    s\n}\n\npub struct C;\n\nimpl C {\n    pub fn m(&self) {}\n}\n"
+	goBroken := strings.Replace(goLib, "\t\treturn x\n\t}\n", "\t\treturn x\n", 1)
+	pyBroken := strings.Replace(pyLib, "return s", "return (s", 1)
+	tests := []struct {
+		name    string
+		c       change
+		parsed  bool
+		symbols []string
+	}{
+		{"go unclosed block", change{status: "M", path: "lib/lib.go", base: goLib, head: goBroken}, false, nil},
+		{"typescript unclosed block", change{status: "M", path: "src/lib.ts", base: tsLib,
+			head: strings.Replace(tsLib, "    return x;\n  }\n", "    return x;\n", 1)}, false, nil},
+		{"python unclosed paren", change{status: "M", path: "pkg/lib.py", base: pyLib,
+			head: strings.Replace(pyLib, "return f(x)", "return f(x", 1)}, false, nil},
+		{"rust unclosed block", change{status: "M", path: "src/lib.rs", base: rsLib,
+			head: strings.Replace(rsLib, "        return x;\n    }\n", "        return x;\n", 1)}, false, nil},
+		{"renamed file", change{status: "R", path: "lib/lib2.go", oldPath: "lib/lib.go", base: goLib, head: goBroken}, false, nil},
+		{"base already broken", change{status: "M", path: "pkg/lib.py", base: pyBroken,
+			head: pyBroken + "\n\ndef d():\n    pass\n"}, true, []string{"pkg/lib.py:d added"}},
+		{"added file", change{status: "A", path: "lib/new.go",
+			head: "package lib\n\nfunc N() int {\n\treturn 1\n}\n\nfunc broken( {\n"}, true, []string{"lib/new.go:N added"}},
+		{"parses again", change{status: "M", path: "lib/lib.go", base: goLib,
+			head: strings.Replace(goLib, "return s\n", "return s + s\n", 1)}, true, []string{"lib/lib.go:B body"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fp := computeExtracted(t, "example.com/m", tt.c).Footprint
+			if len(fp.Files) != 1 || fp.Files[0].Parsed != tt.parsed {
+				t.Fatalf("files = %+v, want parsed %v", fp.Files, tt.parsed)
+			}
+			checkLines(t, "symbols", summarize(fp.Symbols), tt.symbols)
+			if !tt.parsed && len(fp.Refs) > 0 {
+				t.Errorf("refs from a file tracked at file level: %q", summarizeRefs(fp.Refs))
+			}
+		})
+	}
 }

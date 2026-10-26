@@ -101,13 +101,14 @@ func extract(p string, src []byte) (f *File, err error) {
 	}
 	defer tree.Close()
 
-	b := &builder{lang: name, path: p, src: src, f: &File{Lang: name}, used: map[string]int{}}
+	root := tree.RootNode()
+	b := &builder{lang: name, path: p, src: src, f: &File{Lang: name, SyntaxErrors: root.HasError()}, used: map[string]int{}}
 	defer func() {
 		if r := recover(); r != nil {
 			f, err = nil, fmt.Errorf("symbols: %s: extractor panic: %v", p, r)
 		}
 	}()
-	l.extract(b, tree.RootNode())
+	l.extract(b, root)
 	b.finish()
 	return b.f, nil
 }

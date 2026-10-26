@@ -563,7 +563,13 @@ main.
 
 For every changed file in a supported language, both versions are parsed with
 tree-sitter. Supported languages: Go, TypeScript, TSX, JavaScript, Python,
-Rust. Other files, and files over 2 MiB, are tracked at file level.
+Rust. Other files, and files over 2 MiB, are tracked at file level. So is a
+file whose new version has syntax errors while its old version had none, as
+a snapshot of a half-written edit does: tree-sitter recovers by swallowing or
+dropping the definitions after the error, which would read as removals, so
+the file stays at file level until it parses again. A file tracked at file
+level says nothing about its symbols: an automatic claim on one of them is
+kept.
 
 Definitions per language:
 

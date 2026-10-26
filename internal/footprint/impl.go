@@ -155,8 +155,9 @@ type version struct {
 
 // parse extracts both versions of a changed file and records what changed.
 // It reports false when the file is tracked at file level only: an
-// unsupported language, a file over MaxFileBytes, the MaxParsed cap, or an
-// extractor that fails on either version.
+// unsupported language, a file over MaxFileBytes, the MaxParsed cap, an
+// extractor that fails on either version, or a new version with syntax
+// errors that the old version did not have.
 func (c *computer) parse(ctx context.Context, e gitx.DiffEntry) (bool, error) {
 	oldPath, newPath := sides(e)
 	if (oldPath != "" && !symbols.Supported(oldPath)) || (newPath != "" && !symbols.Supported(newPath)) {
@@ -196,6 +197,14 @@ func (c *computer) parse(ctx context.Context, e gitx.DiffEntry) (bool, error) {
 			return false, nil
 		}
 		v.file = f
+	}
+	// A half-written edit, such as an unclosed brace in a work tree
+	// snapshot, makes tree-sitter swallow or drop the definitions after it.
+	// Diffing what is left would report them removed, so the file waits at
+	// file level until it parses again. A file that was already broken at
+	// the base is compared as usual: its old version lost as much.
+	if oldV != nil && newV != nil && newV.file.SyntaxErrors && !oldV.file.SyntaxErrors {
+		return false, nil
 	}
 
 	var changes []model.SymbolChange
