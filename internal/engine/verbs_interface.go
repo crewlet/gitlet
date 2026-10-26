@@ -1126,7 +1126,7 @@ func (e *Engine) dirtyPaths(ctx context.Context, paths []string) ([]string, erro
 	}
 	entries, err := e.bg.Status(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("engine: use: %w", err)
+		return nil, fmt.Errorf("engine: %w", err)
 	}
 	var out []string
 	for _, s := range entries {

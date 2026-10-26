@@ -1101,6 +1101,89 @@ func TestFlowSubmitInterface(t *testing.T) {
 	flowWant(t, "interface submit again", r.Result, api.NothingToDo)
 }
 
+// ---- start after a task ----
+
+func TestFlowStartLeavesTheBranchOfAFinishedTask(t *testing.T) {
+	requireDeps(t)
+	flowFakeGh(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	main := runGit(t, f.a, "rev-parse", "origin/main")
+
+	// The first task is submitted and its branch stays checked out.
+	_, first := flowStart(t, ctx, ea, "Use gitlet.json by default")
+	firstHead := flowCommit(t, f.a, "default: use gitlet.json", "default.go", strings.Replace(mainGo, "gitlet.toml", "gitlet.json", 1))
+	sub, err := ea.Submit(ctx, api.SubmitInput{})
+	must(t, err)
+	flowWant(t, "submit", sub.Result, api.OK)
+
+	// The next task gets a branch of its own, from main: its commits must not
+	// go into the first task's pull request.
+	clk.Advance(6 * time.Second)
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Add a README section about logging"})
+	must(t, err)
+	flowWant(t, "start after submit", r.Result, api.OK)
+	second := r.Data.Branch
+	if !r.Data.NewBranch || second == first || !strings.HasPrefix(second, "gitlet/add-a-readme-section") {
+		t.Fatalf("start after submit: branch %q (new %v), the submitted task is on %s", second, r.Data.NewBranch, first)
+	}
+	if got := runGit(t, f.a, "rev-parse", "--abbrev-ref", "HEAD"); got != second {
+		t.Errorf("worktree on %q, want %q", got, second)
+	}
+	if got := runGit(t, f.a, "rev-parse", "HEAD"); got != main {
+		t.Errorf("%s starts at %s, want main %s", second, got, main)
+	}
+	if !slices.ContainsFunc(r.Details, func(d string) bool {
+		return strings.Contains(d, first) && strings.Contains(d, "submitted") && strings.Contains(d, flowPRURL)
+	}) {
+		t.Errorf("details do not say whose branch %s is: %v", first, r.Details)
+	}
+	flowCommit(t, f.a, "readme: logging", "README.md", "# demo\n\n## Logging\n")
+	sub, err = ea.Submit(ctx, api.SubmitInput{})
+	must(t, err)
+	flowWant(t, "submit the second task", sub.Result, api.OK)
+	if got := runGit(t, f.remote, "rev-parse", "refs/heads/"+first); got != firstHead {
+		t.Errorf("the submitted branch %s moved to %s, want %s", first, got, firstHead)
+	}
+
+	// An abandoned task's commits do not carry over either.
+	clk.Advance(6 * time.Second)
+	_, third := flowStart(t, ctx, ea, "Rename the default configuration file")
+	flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+	ab, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+
+	// Uncommitted changes that main's version of a file would overwrite are
+	// refused with a way to set them aside.
+	writeFile(t, f.a, "default.go", strings.Replace(mainGo, "gitlet.toml", "other.toml", 1))
+	r, err = ea.Start(ctx, api.StartInput{Intent: "Read the configuration from the environment"})
+	must(t, err)
+	flowWant(t, "start with conflicting changes", r.Result, api.Refused)
+	if !flowHasCommand(r.Options, "git stash") || !flowHasTool(r.Options, "start", "intent", "Read the configuration from the environment") {
+		t.Errorf("options %+v", r.Options)
+	}
+	if got := runGit(t, f.a, "rev-parse", "--abbrev-ref", "HEAD"); got != third {
+		t.Errorf("worktree on %q after the refusal, want %q", got, third)
+	}
+	runGit(t, f.a, "checkout", "--", "default.go")
+
+	r, err = ea.Start(ctx, api.StartInput{Intent: "Read the configuration from the environment", Branch: "env-config"})
+	must(t, err)
+	flowWant(t, "start after abandon", r.Result, api.OK)
+	if !r.Data.NewBranch || r.Data.Branch != "env-config" {
+		t.Fatalf("start after abandon: branch %q (new %v)", r.Data.Branch, r.Data.NewBranch)
+	}
+	if got := runGit(t, f.a, "rev-parse", "HEAD"); got != main {
+		t.Errorf("env-config starts at %s, want main %s", got, main)
+	}
+	if !slices.ContainsFunc(r.Details, func(d string) bool { return strings.Contains(d, third) && strings.Contains(d, "abandoned") }) {
+		t.Errorf("details %v", r.Details)
+	}
+}
+
 // ---- abandon ----
 
 func TestFlowAbandon(t *testing.T) {

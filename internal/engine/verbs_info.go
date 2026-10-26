@@ -88,18 +88,41 @@ func (e *Engine) doStart(ctx context.Context, in api.StartInput) (*api.Reply[api
 	}
 	branch, newBranch := cur, false
 	var details []string
-	if cur == "" || cur == e.cfg.Main {
+	left, leaving := e.finishedBranchItem(cur)
+	if cur == "" || cur == e.cfg.Main || leaving {
 		name := strings.TrimSpace(in.Branch)
 		if name == "" {
 			name = defaultBranchName(e.cfg.BranchPrefix, intent, id)
 		}
-		if refusal, err := e.createWorkBranch(ctx, name, intent); err != nil || refusal != nil {
+		from, fromName := "", ""
+		if leaving {
+			// The branch is a finished task's: HEAD carries its commits, and
+			// pushing it would feed its pull request. The new task starts
+			// from main.
+			from, fromName = e.mainOID(ctx), e.mainUpstream()
+			if from == "" {
+				from = e.cfg.Main
+			} else {
+				fromName += " " + shortOID(from)
+			}
+			if refusal, err := e.carryRefusal(ctx, left, from, intent, in.Branch); err != nil || refusal != nil {
+				if refusal != nil {
+					return reply(*refusal, none), nil
+				}
+				return nil, err
+			}
+		}
+		if refusal, err := e.createWorkBranch(ctx, name, from, intent); err != nil || refusal != nil {
 			if refusal != nil {
 				return reply(*refusal, none), nil
 			}
 			return nil, err
 		}
 		branch, newBranch = name, true
+		if leaving {
+			details = append(details, fmt.Sprintf("the new branch starts from %s: %s stays with your %s task %q%s",
+				fromName, cur, left.Status, left.Intent, prSuffix(left.PR)))
+		}
 	} else if b := strings.TrimSpace(in.Branch); b != "" && b != cur {
 		details = append(details, fmt.Sprintf("stayed on branch %s: a branch is only created on %s or a detached HEAD", cur, e.cfg.Main))
 	}
@@ -189,9 +212,54 @@ func (e *Engine) activeRefusal(it model.WorkItem) api.Result {
 		toolOption("stop that task (its branch is kept)", "abandon", "reason", "<why>"))
 }
 
-// createWorkBranch creates and switches to branch, carrying uncommitted
-// changes along. Problems the agent can fix are refusals.
-func (e *Engine) createWorkBranch(ctx context.Context, name, intent string) (*api.Result, error) {
+// finishedBranchItem returns my item on branch that is no longer active
+// (submitted, landed or abandoned), preferring a submitted one. A new task
+// never stays on such a branch.
+func (e *Engine) finishedBranchItem(branch string) (model.WorkItem, bool) {
+	var found model.WorkItem
+	ok := false
+	if branch == "" || branch == e.cfg.Main {
+		return found, false
+	}
+	for _, it := range e.myState().Items {
+		if it.Branch == branch && it.Status != model.ItemActive && (!ok || it.Status.Open()) {
+			found, ok = it, true
+		}
+	}
+	return found, ok
+}
+
+// carryRefusal refuses start when uncommitted changes cannot come along to
+// a new branch at from, because from has other versions of those files.
+func (e *Engine) carryRefusal(ctx context.Context, left model.WorkItem, from, intent, branch string) (*api.Result, error) {
+	differ, err := e.repo.DiffNames(ctx, "HEAD", from)
+	if err != nil {
+		return nil, fmt.Errorf("engine: start: %w", err)
+	}
+	blocked, err := e.dirtyPaths(ctx, differ)
+	if err != nil || len(blocked) == 0 {
+		return nil, err
+	}
+	r := refused(fmt.Sprintf("Cannot start a new branch from %s: it would overwrite your uncommitted changes to %s.", e.mainUpstream(), joinCapped(blocked, maxDetailNames)),
+		[]string{fmt.Sprintf("branch %s belongs to your %s task %q, so a new task starts from %s, where these files differ", left.Branch, left.Status, left.Intent, e.mainUpstream())},
+		cmdOption("set your changes aside", "git stash push --include-untracked"),
+		toolOption("start again", "start", "intent", intent, "branch", strings.TrimSpace(branch)),
+		cmdOption("then bring your changes back onto the new branch", "git stash pop"))
+	return &r, nil
+}
+
+// prSuffix is " (<pr>)", or "" without a pull request.
+func prSuffix(pr string) string {
+	if pr == "" {
+		return ""
+	}
+	return " (" + pr + ")"
+}
+
+// createWorkBranch creates and switches to branch at from ("" means HEAD),
+// carrying uncommitted changes along. Problems the agent can fix are
+// refusals.
+func (e *Engine) createWorkBranch(ctx context.Context, name, from, intent string) (*api.Result, error) {
 	if _, err := e.repo.Run(ctx, "check-ref-format", "--branch", name); err != nil {
 		r := refused(fmt.Sprintf("%q is not a valid branch name.", name), nil,
 			toolOption("let gitlet name the branch", "start", "intent", intent))
@@ -202,12 +270,14 @@ func (e *Engine) createWorkBranch(ctx context.Context, name, intent string) (*ap
 		return nil, fmt.Errorf("engine: start: %w", err)
 	}
 	if exists {
-		r := refused(fmt.Sprintf("Branch %s already exists.", name), nil,
-			toolOption("use another branch name", "start", "intent", intent, "branch", name+"-2"),
-			cmdOption("or switch to it and start there", "git switch "+shellQuote(name)))
+		opts := []model.Option{toolOption("use another branch name", "start", "intent", intent, "branch", name+"-2")}
+		if _, finished := e.finishedBranchItem(name); !finished {
+			opts = append(opts, cmdOption("or switch to it and start there", "git switch "+shellQuote(name)))
+		}
+		r := refused(fmt.Sprintf("Branch %s already exists.", name), nil, opts...)
 		return &r, nil
 	}
-	if err := e.repo.CreateBranch(ctx, name, ""); err != nil {
+	if err := e.repo.CreateBranch(ctx, name, from); err != nil {
 		var gerr *gitx.Error
 		if errors.As(err, &gerr) {
 			r := refused(fmt.Sprintf("Could not create branch %s: %s", name, firstLine(gerr.Stderr)), nil,

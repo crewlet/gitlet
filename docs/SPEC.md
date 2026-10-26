@@ -440,8 +440,12 @@ A work item is one task on one branch in one worktree.
 - **`start`** opens the item and pushes `state.json` at once. On the main
   branch or a detached HEAD it creates and switches to `branch` or
   `<gitlet.branchPrefix><slug>-<4 hex of item>` (prefix default `gitlet/`),
-  carrying uncommitted changes along. On another branch it stays there. Its
-  result lists:
+  carrying uncommitted changes along. On another branch it stays there,
+  unless that branch belongs to a submitted or closed item of mine: then it
+  creates the new branch the same way but from main, not HEAD, so the new
+  task neither builds on that item's commits nor pushes into its PR.
+  Uncommitted changes that main's version of their files would overwrite are
+  refused, with `git stash` as the way out. Its result lists:
   - active items with similar intent (section 10.2),
   - items and claims touching `paths`,
   - commits on main from the last 7 days with similar subjects ("already
