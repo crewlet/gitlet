@@ -412,13 +412,7 @@ func (e *Engine) pushWip(ctx context.Context, item model.ItemID) (snapErr string
 	switch {
 	case err == nil:
 	case errors.As(err, &rej):
-		snapErr = rej.Reason
-		if len(rej.Remote) > 0 {
-			snapErr += ": " + strings.Join(rej.Remote, " ")
-		}
-		if len(snapErr) > maxSnapshotErr {
-			snapErr = snapErr[:maxSnapshotErr]
-		}
+		snapErr = snapshotRejection(rej)
 		e.appendEvent(ctx, "snapshot_rejected", map[string]any{"item": item, "reason": snapErr})
 	case gitx.IsNetwork(err):
 		e.poll.markOffline(now)
@@ -433,6 +427,19 @@ func (e *Engine) pushWip(ctx context.Context, item model.ItemID) (snapErr string
 	e.snap.WipItem, e.snap.WipTree, e.snap.WipAt = item, e.snap.Tree, now
 	e.saveSnap(ctx)
 	return snapErr, true
+}
+
+// snapshotRejection is the snapshotError for a rejected wip push: the reason
+// and the remote's lines, capped.
+func snapshotRejection(rej *bus.RejectedError) string {
+	s := rej.Reason
+	if len(rej.Remote) > 0 {
+		s += ": " + strings.Join(rej.Remote, " ")
+	}
+	if len(s) > maxSnapshotErr {
+		s = s[:maxSnapshotErr]
+	}
+	return s
 }
 
 // footprint returns the footprint of head against base (footprint.Compute,

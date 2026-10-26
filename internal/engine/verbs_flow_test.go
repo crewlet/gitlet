@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1852,4 +1854,32 @@ func TestFlowAbandonASubmittedTask(t *testing.T) {
 	r, err = ea.Abandon(ctx, api.AbandonInput{Item: string(x)})
 	must(t, err)
 	flowWant(t, "abandon an abandoned item", r.Result, api.NothingToDo)
+}
+
+func TestFlowFlushedSnapshotRejectionIsRecorded(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	ea := openEngine(t, Options{Dir: f.a})
+	item, _ := flowStart(t, ctx, ea, "Rename the default configuration file")
+
+	// What a flush returns when the remote rejects a snapshot written while
+	// it was unreachable, next to an unrelated state rejection.
+	err := fmt.Errorf("bus: flush: %w", errors.Join(
+		&bus.RejectedError{Ref: bus.StateRef(ea.me.ID), Reason: "hook declined"},
+		&bus.RejectedError{Ref: bus.WipRef(ea.me.ID, item), Reason: "pre-receive hook declined", Remote: []string{"no snapshots here"}},
+	))
+	ea.mu.Lock()
+	ea.recordWipRejections(ctx, err)
+	ea.mu.Unlock()
+
+	want := "pre-receive hook declined: no snapshots here"
+	if i := itemIndex(ea.myState().Items, item); i < 0 || ea.myState().Items[i].SnapshotErr != want {
+		t.Fatalf("items = %+v, want snapshotError %q on %s", ea.myState().Items, want, item)
+	}
+	st, err := ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	if !slices.ContainsFunc(st.Warnings, func(w string) bool { return strings.Contains(w, "was not published: "+want) }) {
+		t.Errorf("status warnings = %q, want the rejected snapshot", st.Warnings)
+	}
 }

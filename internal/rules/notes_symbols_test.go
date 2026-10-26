@@ -90,8 +90,8 @@ func TestCalleeChanged(t *testing.T) {
 			peer(bob, item(bobItem, bobIntent, changes(sigChange(loadM, "load(string, boolean): void", true)))).v, model.SeverityAct},
 		{"method through its class, from an older gitlet's footprint", view().mine(item(myItem, myIntent, refs(loadCall("")), olderFootprint())).
 			peer(bob, item(bobItem, bobIntent, changes(sigChange(loadM, "load(string, boolean): void", true)))).v, model.SeverityAct},
-		{"no container in a current footprint", view().mine(item(myItem, myIntent, refs(loadCall("")))).
-			peer(bob, item(bobItem, bobIntent, changes(sigChange(loadM, "load(string, boolean): void", true)))).v, ""},
+		{"no container in a current footprint matches only as unresolved", view().mine(item(myItem, myIntent, refs(loadCall("")))).
+			peer(bob, item(bobItem, bobIntent, changes(sigChange(loadM, "load(string, boolean): void", true)))).v, model.SeverityInfo},
 		{"suppressed by my need", callerView(cfgBreaking).need(me, model.Need{Key: cfg.Key, Name: cfg.Ref(), Item: myItem}).v, ""},
 		{"not suppressed by a need of my other item", callerView(cfgBreaking).need(me, model.Need{Key: cfg.Key, Item: myItem2}).v, model.SeverityAct},
 		{"I change it too", callerView(cfgBreaking, changes(bodyChange(cfg))).v, ""},

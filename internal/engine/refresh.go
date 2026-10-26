@@ -236,6 +236,7 @@ func (e *Engine) flushIfNeeded(ctx context.Context) {
 	}
 	if err := e.bus.Flush(ctx); err != nil {
 		e.log.Debug("flush", "err", err)
+		e.recordWipRejections(ctx, err)
 		switch {
 		case gitx.IsNetwork(err):
 			e.poll.markOffline(e.now())
@@ -539,23 +540,69 @@ func errBudget(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
-// onlyRejected reports whether every error err holds is a *bus.RejectedError.
-func onlyRejected(err error) bool {
-	switch x := err.(type) {
-	case *bus.RejectedError:
-		return true
-	case interface{ Unwrap() []error }:
-		errs := x.Unwrap()
-		for _, e := range errs {
-			if !onlyRejected(e) {
-				return false
+// recordWipRejections makes each snapshot a flush got rejected (one written
+// while the remote was unreachable) its item's snapshotError, as pushWip
+// does for its own pushes. The bus has moved those wip refs back.
+func (e *Engine) recordWipRejections(ctx context.Context, err error) {
+	prefix := bus.WipRef(e.me.ID, "")
+	rejected := map[model.ItemID]string{}
+	for _, leaf := range leafErrors(err) {
+		if rej, ok := leaf.(*bus.RejectedError); ok && strings.HasPrefix(rej.Ref, prefix) {
+			rejected[model.ItemID(strings.TrimPrefix(rej.Ref, prefix))] = snapshotRejection(rej)
+		}
+	}
+	if len(rejected) == 0 {
+		return
+	}
+	for item, reason := range rejected {
+		e.appendEvent(ctx, "snapshot_rejected", map[string]any{"item": item, "reason": reason})
+	}
+	if _, err := e.mutateState(ctx, func(st *model.AgentState) error {
+		changed := false
+		for i := range st.Items {
+			it := &st.Items[i]
+			if reason, ok := rejected[it.ID]; ok && it.Status.Open() && it.SnapshotErr != reason {
+				it.SnapshotErr = reason
+				changed = true
 			}
 		}
-		return len(errs) > 0
-	case interface{ Unwrap() error }:
-		return onlyRejected(x.Unwrap())
+		if !changed {
+			return errNoChange
+		}
+		return nil
+	}); err != nil && !errors.Is(err, errNoChange) {
+		e.log.Debug("record snapshot rejection", "err", err)
 	}
-	return false
+}
+
+// onlyRejected reports whether every error err holds is a *bus.RejectedError.
+func onlyRejected(err error) bool {
+	leaves := leafErrors(err)
+	for _, leaf := range leaves {
+		if _, ok := leaf.(*bus.RejectedError); !ok {
+			return false
+		}
+	}
+	return len(leaves) > 0
+}
+
+// leafErrors returns the errors err holds, through wraps and joins.
+func leafErrors(err error) []error {
+	switch x := err.(type) {
+	case nil:
+		return nil
+	case interface{ Unwrap() []error }:
+		var out []error
+		for _, e := range x.Unwrap() {
+			out = append(out, leafErrors(e)...)
+		}
+		return out
+	case interface{ Unwrap() error }:
+		if u := x.Unwrap(); u != nil {
+			return leafErrors(u)
+		}
+	}
+	return []error{err}
 }
 
 // peerIDs returns every other agent in the shared state, sorted.
