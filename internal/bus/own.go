@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/gitlet/internal/gitx"
 	"github.com/crewlet/gitlet/internal/model"
@@ -134,6 +135,9 @@ func (b *Bus) writeWip(ctx context.Context, item model.ItemID, commit string) er
 	ref := WipRef(b.me, item)
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+	if err := b.checkUnpushed(ctx, ref, commit); err != nil {
+		return fmt.Errorf("bus: push %s: %w", ref, err)
+	}
 	if err := b.repo.UpdateRef(ctx, ref, commit, ""); err != nil {
 		return fmt.Errorf("bus: write %s: %w", ref, err)
 	}
@@ -147,6 +151,38 @@ func (b *Bus) writeWip(ctx context.Context, item model.ItemID, commit string) er
 		return fmt.Errorf("bus: push %s: %w", ref, err)
 	}
 	return nil
+}
+
+// checkUnpushed refuses a snapshot whose push would publish files a
+// snapshot never carries (docs/SPEC.md, section 9.1). A snapshot builds on
+// HEAD, so its push sends every commit the remote lacks, and a denied or
+// oversized file committed there would reach the shared remote with it,
+// past the user's pre-push hooks. The refusal is a *RejectedError, as if
+// the remote had declined the push. The check is local, so it runs whether
+// or not the remote is reachable, and Flush only ever pushes a snapshot
+// that passed it. Without a remote nothing leaves the machine.
+func (b *Bus) checkUnpushed(ctx context.Context, ref, commit string) error {
+	if b.remoteName == "" {
+		return nil
+	}
+	published := []string{
+		"refs/remotes/" + b.remoteName + "/",
+		mainPrefix + b.remoteName,
+		headsPrefix + b.remoteName + "/",
+		remotePrefix + b.remoteName + "/",
+	}
+	paths, err := b.repo.PushExcluded(ctx, commit, published, b.maxSnap)
+	if err != nil || len(paths) == 0 {
+		return err
+	}
+	const shown = 5
+	list := strings.Join(paths[:min(len(paths), shown)], ", ")
+	if len(paths) > shown {
+		list += fmt.Sprintf(" and %d more", len(paths)-shown)
+	}
+	return &RejectedError{Ref: ref, Kind: gitx.RejectOther, Reason: fmt.Sprintf(
+		"not pushed: commits not on %s yet contain files a snapshot never publishes (denied, or over %d bytes): %s; push or rewrite them to publish snapshots again",
+		b.remoteName, b.maxSnap, list)}
 }
 
 // unwriteWip moves a wip ref the remote rejected back to the snapshot last

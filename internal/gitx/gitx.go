@@ -272,6 +272,18 @@ func (r *Repo) Snapshot(ctx context.Context, opt SnapshotOptions) (SnapshotResul
 // *.keystore, credentials*, secrets.* (matched on the base name).
 func IsDenied(path string) bool { return isDenied(path) }
 
+// PushExcluded lists the files a push of commit would publish although a
+// snapshot never carries them (docs/SPEC.md, section 9.1): denied files
+// and files larger than maxSize (0 means no limit) among the blobs commit
+// reaches and the refs matching published do not. published holds
+// for-each-ref patterns ("refs/remotes/origin/") for the refs the remote is
+// known to have, so these are the blobs the push would send. A snapshot
+// leaves such files out of what it changes, so the ones found come from
+// commits that are not pushed yet. Paths are sorted and listed once.
+func (r *Repo) PushExcluded(ctx context.Context, commit string, published []string, maxSize int64) ([]string, error) {
+	return r.pushExcluded(ctx, commit, published, maxSize)
+}
+
 // TreeOf returns the tree id of a commit.
 func (r *Repo) TreeOf(ctx context.Context, commit string) (string, error) {
 	return r.treeOf(ctx, commit)

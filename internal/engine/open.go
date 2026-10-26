@@ -100,11 +100,12 @@ func open(ctx context.Context, opt Options) (*Engine, error) {
 		remote = ""
 	}
 	e.bus = bus.New(e.bg, id, bus.Options{
-		Remote:  remote,
-		Main:    e.cfg.Main,
-		LockDir: e.stateDir,
-		PushLog: led,
-		Now:     e.now,
+		Remote:          remote,
+		Main:            e.cfg.Main,
+		LockDir:         e.stateDir,
+		PushLog:         led,
+		Now:             e.now,
+		MaxSnapshotFile: e.cfg.MaxSnapshotFile,
 	})
 	e.pollSem = make(chan struct{}, 1)
 	e.extract = newExtractCache(extractCacheSize)

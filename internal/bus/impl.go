@@ -17,6 +17,9 @@ var _ Repo = (*gitx.Repo)(nil)
 
 const (
 	defaultFetchReuse = 5 * time.Second
+	// defaultMaxSnapshotFile is gitlet.maxSnapshotFile's default
+	// (docs/SPEC.md, section 9.1).
+	defaultMaxSnapshotFile = 5 << 20
 	// observerRetry is how long the bus stays read-only after the remote
 	// refused a push for lack of permission; the next push after it is the
 	// re-probe (docs/SPEC.md, section 6.1).
@@ -56,6 +59,7 @@ type impl struct {
 	pushLog    PushLog
 	now        func() time.Time
 	fetchReuse time.Duration
+	maxSnap    int64 // largest file a snapshot's push may publish
 
 	// isNetwork and isPermission classify failed git invocations. They are
 	// gitx's classifiers; tests replace them because those need real git
@@ -92,6 +96,7 @@ func newBus(repo Repo, me model.AgentID, opt Options) *Bus {
 		pushLog:      opt.PushLog,
 		now:          opt.Now,
 		fetchReuse:   opt.FetchReuse,
+		maxSnap:      opt.MaxSnapshotFile,
 		isNetwork:    gitx.IsNetwork,
 		isPermission: gitx.IsPermission,
 		refused:      map[string]string{},
@@ -107,6 +112,9 @@ func newBus(repo Repo, me model.AgentID, opt Options) *Bus {
 	}
 	if b.fetchReuse == 0 {
 		b.fetchReuse = defaultFetchReuse
+	}
+	if b.maxSnap <= 0 {
+		b.maxSnap = defaultMaxSnapshotFile
 	}
 	return b
 }

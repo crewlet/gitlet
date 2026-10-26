@@ -250,6 +250,41 @@ func TestGitWipOnDemand(t *testing.T) {
 	}
 }
 
+// TestGitWipKeepsUnpushedSecretsLocal: after `git add -A && git commit`
+// caught a secret, the snapshot (whose parent is HEAD) is not pushed until
+// the commit is on the remote (docs/SPEC.md, section 9.1).
+func TestGitWipKeepsUnpushedSecretsLocal(t *testing.T) {
+	ctx := context.Background()
+	g := newGitEnv(t)
+	repo := g.clone("a")
+	a := g.bus(repo, agentA)
+	git(t, repo.Root, "switch", "-q", "-c", "feature")
+	must(t, os.WriteFile(filepath.Join(repo.Root, ".env.local"), []byte("SECRET=1\n"), 0o644))
+	git(t, repo.Root, "add", "-A")
+	git(t, repo.Root, "commit", "-q", "-m", "work")
+	head, err := repo.RevParse(ctx, "HEAD")
+	must(t, err)
+	snap, err := repo.Snapshot(ctx, gitx.SnapshotOptions{Parent: head, Message: "gitlet: snapshot"})
+	must(t, err)
+
+	var rej *RejectedError
+	if err := a.WriteWip(ctx, itemA, snap.Commit); !errors.As(err, &rej) || !strings.Contains(rej.Reason, ".env.local") {
+		t.Fatalf("WriteWip: %v, want a RejectedError naming .env.local", err)
+	}
+	if g.remoteRef(WipRef(agentA, itemA)) != "" {
+		t.Fatal("the snapshot reached the remote")
+	}
+	if exec.Command("git", "-C", g.remote, "cat-file", "-e", head).Run() == nil {
+		t.Fatal("the unpushed commit reached the remote")
+	}
+
+	git(t, repo.Root, "push", "-q", "origin", "feature")
+	must(t, a.WriteWip(ctx, itemA, snap.Commit))
+	if g.remoteRef(WipRef(agentA, itemA)) != snap.Commit {
+		t.Fatal("snapshot not pushed once its history is on the remote")
+	}
+}
+
 // TestGitRejectedWipNotFlushed: a snapshot a pre-receive hook declined is
 // not pushed again by later flushes.
 func TestGitRejectedWipNotFlushed(t *testing.T) {

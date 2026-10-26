@@ -291,6 +291,42 @@ func TestFlushDeletesRefsDeletedOffline(t *testing.T) {
 	}
 }
 
+// TestWriteWipRefusesUnpushedExcludedFiles: a snapshot whose push would
+// publish a denied or oversized file from commits not on the remote yet is
+// refused before anything is written or pushed (docs/SPEC.md, section 9.1).
+func TestWriteWipRefusesUnpushedExcludedFiles(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	repo := e.clone()
+	b := e.bus(repo, agentA, withMaxSnapshotFile(16))
+	main := e.remote.get("refs/heads/main")
+	repo.setRef("refs/remotes/origin/main", main)
+
+	secret := e.store.commit("config/.env.local", []byte("SECRET=1\n"), "local work", main)
+	big := e.store.commit("data.bin", []byte(strings.Repeat("x", 17)), "more local work", secret)
+	snap := e.store.commit("f.go", []byte("package f"), "gitlet: snapshot", big)
+	before := len(repo.pushLog())
+	var rej *RejectedError
+	err := b.WriteWip(ctx, itemA, snap)
+	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, "config/.env.local, data.bin") {
+		t.Fatalf("WriteWip: %v, want a RejectedError naming both files", err)
+	}
+	if len(repo.pushLog()) != before || repo.ref(WipRef(agentA, itemA)) != "" {
+		t.Fatal("the refused snapshot was written or pushed")
+	}
+
+	// Once those commits are on the remote, the snapshot is pushed.
+	repo.setRef("refs/remotes/origin/feature", big)
+	mustNoErr(t, b.WriteWip(ctx, itemA, snap))
+	if e.remote.get(WipRef(agentA, itemA)) != snap {
+		t.Fatal("snapshot not pushed")
+	}
+
+	// Without a remote nothing leaves the machine, so nothing is refused.
+	lb := e.bus(e.local(), agentA, withMaxSnapshotFile(16))
+	mustNoErr(t, lb.WriteWip(ctx, itemA, snap))
+}
+
 // TestFlushSkipsRejectedWip: a snapshot the remote rejected is not pushed
 // again by Flush, in this process or another (docs/SPEC.md, section 6.1).
 func TestFlushSkipsRejectedWip(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -386,6 +387,60 @@ func (s *snapper) blobSizes(changes []indexChange) (map[string]int64, error) {
 		}
 	}
 	return sizes, nil
+}
+
+func (r *Repo) pushExcluded(ctx context.Context, commit string, published []string, maxSize int64) ([]string, error) {
+	if err := checkRev(commit); err != nil {
+		return nil, err
+	}
+	revs := []string{commit}
+	if len(published) > 0 {
+		for _, p := range published {
+			if !strings.HasPrefix(p, "refs/") || strings.ContainsAny(p, "\x00\n") {
+				return nil, fmt.Errorf("gitx: invalid ref pattern %q", p)
+			}
+		}
+		out, err := r.read(ctx, append([]string{"for-each-ref", "--format=%(objectname)"}, published...)...)
+		if err != nil {
+			return nil, err
+		}
+		for _, oid := range lines(out) {
+			revs = append(revs, "^"+oid)
+		}
+	}
+	// The tips go through stdin: a clone can track many refs.
+	out, err := r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(revs, "\n") + "\n")}, "rev-list", "--objects", "--stdin")
+	if err != nil {
+		return nil, mapNotFound(err, commit)
+	}
+	// Commits are listed as "<oid>", trees and blobs as "<oid> <path>": the
+	// path at which the walk first met the object, cut at a newline. Not
+	// lines(), which would also cut a trailing "\r" from the path.
+	var oids, paths []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if oid, p, ok := strings.Cut(l, " "); ok && p != "" {
+			oids, paths = append(oids, oid), append(paths, p)
+		}
+	}
+	if len(oids) == 0 {
+		return nil, nil
+	}
+	out, err = r.exec(ctx, cmdOpts{stdin: []byte(strings.Join(oids, "\n") + "\n")}, "cat-file", "--batch-check")
+	if err != nil {
+		return nil, err
+	}
+	found := map[string]bool{}
+	for i, l := range lines(string(out)) {
+		f := strings.Fields(l) // <oid> <type> <size>, in input order
+		if i >= len(paths) || len(f) != 3 || f[1] != "blob" {
+			continue
+		}
+		size, err := strconv.ParseInt(f[2], 10, 64)
+		if isDenied(paths[i]) || (maxSize > 0 && err == nil && size > maxSize) {
+			found[paths[i]] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(found)), nil
 }
 
 func nulJoin(paths []string) []byte {

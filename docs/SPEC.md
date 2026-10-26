@@ -542,9 +542,16 @@ main.
 - **Untracked files** follow `gitlet.snapshotUntracked`: `source` (default:
   files in supported languages or matching `gitlet.snapshotInclude`), `all`,
   or `none`. A built-in deny list is always skipped: `.env*`, `*.pem`, `*.key`,
-  `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `*.keystore`, `credentials*`,
-  `secrets.*`, plus any file over `gitlet.maxSnapshotFile` (5 MiB), tracked or
-  not.
+  `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `*.keystore`,
+  `credentials*`, `secrets.*`, plus any file over `gitlet.maxSnapshotFile`
+  (5 MiB), tracked or not.
+- **Unpushed commits.** A snapshot's parent is HEAD, so pushing it also sends
+  every commit the remote lacks (not reachable from `refs/remotes/<remote>/*`
+  or gitlet's copies of the remote's refs). When those commits hold a denied
+  or oversized file (`git add -A && git commit` caught a `.env.local`), the
+  snapshot is not pushed: the item gets `snapshotError` naming the files and
+  its footprint is still published. Once those commits are pushed or
+  rewritten, the next snapshot of a changed work tree is published.
 - `gitlet.publishSnapshots=false` keeps wip refs local. Footprints are still
   published, and conflict prediction then covers only peers on the same
   machine.

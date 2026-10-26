@@ -188,7 +188,8 @@ Settings live in git config under `gitlet.*`. The common ones:
 | `gitlet.autoClaim` | `true` | claim automatically when your breaking change meets someone's references |
 
 Secrets (`.env*`, keys, credentials) and files over 5 MiB never enter
-snapshots. The full list is in [docs/SPEC.md, section 15](docs/SPEC.md#15-configuration).
+snapshots, and a snapshot is not pushed while unpushed commits under it hold
+one. The full list is in [docs/SPEC.md, section 15](docs/SPEC.md#15-configuration).
 Local state lives in `<git common dir>/gitlet/` and can be deleted at any time.
 
 ## Development

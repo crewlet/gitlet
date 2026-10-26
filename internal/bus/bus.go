@@ -50,7 +50,8 @@ var (
 )
 
 // RejectedError is a push the remote rejected for a reason other than a
-// lease, for example a pre-receive hook or push protection.
+// lease, for example a pre-receive hook or push protection, or a snapshot
+// WriteWip refused to push.
 type RejectedError struct {
 	Ref    string
 	Kind   gitx.RejectKind
@@ -83,6 +84,7 @@ type Repo interface {
 	ListRefsByDate(ctx context.Context, prefix string, max int) ([]gitx.RefInfo, error)
 	Fetch(ctx context.Context, opt gitx.FetchOptions) error
 	Push(ctx context.Context, opt gitx.PushOptions) (gitx.PushReport, error)
+	PushExcluded(ctx context.Context, commit string, published []string, maxSize int64) ([]string, error)
 }
 
 // PushLog remembers what this clone last pushed to each ref (the ledger).
@@ -101,6 +103,9 @@ type Options struct {
 	// FetchReuse: a fetch by any process newer than this is reused instead of
 	// fetching again. Default 5 s.
 	FetchReuse time.Duration
+	// MaxSnapshotFile is gitlet.maxSnapshotFile: WriteWip refuses a snapshot
+	// whose push would publish a larger file. Default 5 MiB.
+	MaxSnapshotFile int64
 }
 
 // Bus is one agent's connection to the shared state. It is safe for
@@ -206,6 +211,10 @@ func (b *Bus) WriteOutbox(ctx context.Context, ob model.Outbox, seenOID string) 
 // WriteWip points this agent's wip ref for item at commit and pushes it in a
 // push of its own. A rejection returns *RejectedError and moves the local ref
 // back to the snapshot last pushed, so Flush never pushes the rejected one.
+// With a remote, it also returns *RejectedError, writing and pushing
+// nothing, when the push would publish files a snapshot never carries:
+// denied or larger than MaxSnapshotFile, from commits not on the remote yet
+// (docs/SPEC.md, section 9.1).
 func (b *Bus) WriteWip(ctx context.Context, item model.ItemID, commit string) error {
 	return b.writeWip(ctx, item, commit)
 }

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"path"
 	"slices"
 	"sort"
 	"strconv"
@@ -505,6 +507,57 @@ func (r *fakeRepo) Push(ctx context.Context, opt gitx.PushOptions) (gitx.PushRep
 	return rep, nil
 }
 
+// PushExcluded walks the fake store the way the real one lists objects for
+// a push: what commit reaches and no ref matching published reaches.
+func (r *fakeRepo) PushExcluded(ctx context.Context, commit string, published []string, maxSize int64) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r.store.get(commit) == nil {
+		return nil, notFound(commit)
+	}
+	r.mu.Lock()
+	var tips []string
+	for name, oid := range r.refs {
+		for _, p := range published {
+			if name == p || strings.HasSuffix(p, "/") && strings.HasPrefix(name, p) {
+				tips = append(tips, oid)
+			}
+		}
+	}
+	r.mu.Unlock()
+	seen := map[string]bool{}
+	found := map[string]bool{}
+	var walk func(oid, p string, report bool)
+	walk = func(oid, p string, report bool) {
+		o := r.store.get(oid)
+		if seen[oid] || o == nil {
+			return
+		}
+		seen[oid] = true
+		switch o.kind {
+		case "commit":
+			walk(o.tree, "", report)
+			for _, parent := range o.parents {
+				walk(parent, "", report)
+			}
+		case "tree":
+			for _, e := range o.entries {
+				walk(e.OID, path.Join(p, e.Name), report)
+			}
+		case "blob":
+			if report && (gitx.IsDenied(p) || maxSize > 0 && int64(len(o.data)) > maxSize) {
+				found[p] = true
+			}
+		}
+	}
+	for _, tip := range tips {
+		walk(tip, "", false)
+	}
+	walk(commit, "", true)
+	return slices.Sorted(maps.Keys(found)), nil
+}
+
 // ref returns a local ref ("" when missing).
 func (r *fakeRepo) ref(name string) string {
 	r.mu.Lock()
@@ -587,6 +640,9 @@ type busOpt func(*Options)
 
 func withLockDir(dir string) busOpt { return func(o *Options) { o.LockDir = dir } }
 func withPushLog(l PushLog) busOpt  { return func(o *Options) { o.PushLog = l } }
+func withMaxSnapshotFile(n int64) busOpt {
+	return func(o *Options) { o.MaxSnapshotFile = n }
+}
 
 // bus returns a Bus for agent me on repo, with "origin" as the remote when
 // repo has one, a lock directory of its own and the env's clock.

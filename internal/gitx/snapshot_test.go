@@ -335,6 +335,59 @@ func TestIsDenied(t *testing.T) {
 	}
 }
 
+func TestPushExcluded(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	big := strings.Repeat("x", 2048)
+	f.commitFiles("base", map[string]string{
+		"main.go":      "package main\n",
+		".env.example": "KEY=\n",
+		"fixture.bin":  big,
+		"same.txt":     "SECRET=shared\n",
+	})
+	f.git("remote", "add", "origin", newBare(t))
+	f.git("push", "-q", "origin", "main")
+	published := []string{"refs/remotes/origin/"}
+	check := func(what string, published []string, maxSize int64, want ...string) {
+		t.Helper()
+		got, err := f.repo.PushExcluded(bg, f.git("rev-parse", "HEAD"), published, maxSize)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("%s: PushExcluded = %q, %v; want %q", what, got, err, want)
+		}
+	}
+	check("published history", published, 1024)
+
+	f.commitFiles("local", map[string]string{
+		"config/.env.local":     "SECRET=1\n",
+		"data/big.bin":          big + "y",
+		"credentials/readme.md": "a directory named like a denied file\n",
+		"sp ace.key":            "k\n",
+		".env":                  "SECRET=shared\n", // the same blob as same.txt, already published
+	})
+	f.git("rm", "-q", "config/.env.local")
+	f.commitFiles("remove the secret", map[string]string{"main.go": "package main // 2\n"})
+	check("unpushed commits", published, 1024, "config/.env.local", "data/big.bin", "sp ace.key")
+	check("no size limit", published, 0, "config/.env.local", "sp ace.key")
+	// Now the walk meets the shared blob as .env first.
+	check("nothing published", nil, 1024, ".env", ".env.example", "config/.env.local", "data/big.bin", "fixture.bin", "sp ace.key")
+
+	f.git("push", "-q", "origin", "main")
+	check("after the push", published, 1024)
+
+	head := f.git("rev-parse", "HEAD")
+	for _, bad := range []struct {
+		commit    string
+		published []string
+	}{{"--all", nil}, {head, []string{"--all"}}, {head, []string{"refs/x\nrefs/y"}}} {
+		if _, err := f.repo.PushExcluded(bg, bad.commit, bad.published, 0); err == nil {
+			t.Errorf("PushExcluded(%q, %q) succeeded", bad.commit, bad.published)
+		}
+	}
+	if _, err := f.repo.PushExcluded(bg, strings.Repeat("1", len(head)), nil, 0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("PushExcluded of a missing commit: %v, want ErrNotFound", err)
+	}
+}
+
 func mapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
