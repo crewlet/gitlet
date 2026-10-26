@@ -268,8 +268,9 @@ func notesOfKind(notes []model.Note, kind model.NoteKind) []model.Note {
 
 // warnings lists what every result says about the engine's own condition:
 // offline time or a remote too slow for the refresh budget (with the age of
-// the state used), old git, read-only reasons, skipped documents, rejected
-// snapshots and items whose base is too far behind main.
+// the state used), old git, a remote gitlet could not choose, read-only
+// reasons, skipped documents, unpublished snapshots and items whose base is
+// too far behind main.
 func (e *Engine) warnings(offline *time.Time, age string) []string {
 	var w []string
 	using := "using state from " + age + " ago"
@@ -284,6 +285,9 @@ func (e *Engine) warnings(offline *time.Time, age string) []string {
 	}
 	if e.gitWarn != "" {
 		w = append(w, e.gitWarn)
+	}
+	if note := e.cfg.RemoteNote(); note != "" {
+		w = append(w, "local mode: "+note)
 	}
 	if reason := e.readOnlyReason(); reason != "" {
 		w = append(w, "read-only: "+reason)
@@ -302,7 +306,7 @@ func (e *Engine) warnings(offline *time.Time, age string) []string {
 	items := e.myState().Items
 	for _, it := range items {
 		if it.Status.Open() && it.SnapshotErr != "" {
-			w = append(w, fmt.Sprintf("the remote rejected the snapshot of %q: %s", it.Intent, it.SnapshotErr))
+			w = append(w, fmt.Sprintf("the snapshot of %q was not published: %s", it.Intent, it.SnapshotErr))
 		}
 	}
 	if e.lastView != nil {

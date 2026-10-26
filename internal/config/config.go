@@ -1,5 +1,5 @@
 // Package config reads gitlet settings from git config (gitlet.*), with the
-// defaults from docs/SPEC.md, section 12.
+// defaults from docs/SPEC.md, section 15.
 package config
 
 import (

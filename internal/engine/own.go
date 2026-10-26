@@ -223,6 +223,11 @@ func (e *Engine) ownWriteResult(what, oid string, err error) error {
 			e.log.Warn("identity collision: running read-only", "agent", e.me.ID, "err", err)
 		}
 		return fmt.Errorf("engine: write %s: %w: %w", what, errReadOnly, err)
+	case oid != "" && errBudget(err):
+		// The remote was slow, not wrong: the next flush pushes it.
+		e.log.Debug("push of own document ran out of time", "doc", what, "err", err)
+		e.poll.requestFlush()
+		return nil
 	case oid != "":
 		e.log.Warn("push of own document failed; it stays local until the next flush", "doc", what, "err", err)
 		e.poll.requestFlush()

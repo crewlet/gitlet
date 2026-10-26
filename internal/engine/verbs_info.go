@@ -1226,7 +1226,7 @@ func (e *Engine) doWhy(ctx context.Context, in api.WhyInput) (*api.Reply[api.Why
 	var details []string
 	var summary string
 	switch {
-	case commit == gitx.ZeroOID:
+	case gitx.IsZeroOID(commit):
 		summary = fmt.Sprintf("%s is not committed yet.", t.Name())
 	case commit == "":
 		summary = fmt.Sprintf("%s is not on HEAD yet.", t.Name())

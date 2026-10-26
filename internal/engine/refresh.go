@@ -234,9 +234,12 @@ func (e *Engine) flushIfNeeded(ctx context.Context) {
 	}
 	if err := e.bus.Flush(ctx); err != nil {
 		e.log.Debug("flush", "err", err)
-		if gitx.IsNetwork(err) || errBudget(err) {
+		switch {
+		case gitx.IsNetwork(err) || errBudget(err):
 			e.poll.markOffline(e.now())
-		} else {
+		case !onlyRejected(err):
+			// The bus skips updates the remote rejected, so only other
+			// failures are worth another flush.
 			e.poll.requestFlush()
 		}
 	}
@@ -532,6 +535,25 @@ func (e *Engine) mainOID(ctx context.Context) string {
 // errBudget reports whether err is a context deadline or cancellation.
 func errBudget(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+// onlyRejected reports whether every error err holds is a *bus.RejectedError.
+func onlyRejected(err error) bool {
+	switch x := err.(type) {
+	case *bus.RejectedError:
+		return true
+	case interface{ Unwrap() []error }:
+		errs := x.Unwrap()
+		for _, e := range errs {
+			if !onlyRejected(e) {
+				return false
+			}
+		}
+		return len(errs) > 0
+	case interface{ Unwrap() error }:
+		return onlyRejected(x.Unwrap())
+	}
+	return false
 }
 
 // peerIDs returns every other agent in the shared state, sorted.

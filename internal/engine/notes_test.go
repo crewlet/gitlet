@@ -3,12 +3,14 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/crewlet/gitlet/internal/api"
+	"github.com/crewlet/gitlet/internal/bus"
 	"github.com/crewlet/gitlet/internal/ledger"
 	"github.com/crewlet/gitlet/internal/model"
 	"github.com/crewlet/gitlet/internal/render"
@@ -297,5 +299,26 @@ func TestNewNotesOnlyUnshown(t *testing.T) {
 	}
 	if got := ids(newNotes(stored)); !reflect.DeepEqual(got, []string{"new-act", "new-info"}) {
 		t.Errorf("newNotes = %v", got)
+	}
+}
+
+func TestOnlyRejected(t *testing.T) {
+	rej := &bus.RejectedError{Ref: "refs/gitlet/agents/a/state", Reason: "hook"}
+	other := errors.New("ledger is locked")
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{rej, true},
+		{fmt.Errorf("bus: flush: %w", errors.Join(rej, rej)), true},
+		{fmt.Errorf("bus: flush: %w", errors.Join(rej, other)), false},
+		{fmt.Errorf("bus: flush: %w", bus.ErrIdentityCollision), false},
+		{errors.Join(), false},
+		{other, false},
+	}
+	for _, tt := range tests {
+		if got := onlyRejected(tt.err); got != tt.want {
+			t.Errorf("onlyRejected(%v) = %v, want %v", tt.err, got, tt.want)
+		}
 	}
 }
