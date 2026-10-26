@@ -1971,6 +1971,78 @@ func TestFlowStartMovesCommitsAroundUncommittedChanges(t *testing.T) {
 	}
 }
 
+// A move off a finished task's branch that stops on a conflict leaves the
+// branch it named behind once the agent aborts it. Start then names the
+// next free branch, so the commands it offers run, and refuses a branch it
+// is given that exists before offering to create it.
+func TestFlowStartOffersAFreeBranchAfterAFailedMove(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+
+	_, old := flowStart(t, ctx, ea, "Rename the default configuration file")
+	flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+	ab, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+	flowCommit(t, f.a, "default: json", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.json", 1))
+
+	in := api.StartInput{Intent: "Read the configuration from the environment"}
+	sh := func(c string) (string, error) {
+		out, err := exec.Command("sh", "-c", "cd '"+f.a+"' && "+c).CombinedOutput()
+		return string(out), err
+	}
+	command := func(opts []model.Option, prefix string, cherryPick bool) string {
+		for _, o := range opts {
+			if strings.HasPrefix(o.Command, prefix) && strings.Contains(o.Command, "git cherry-pick") == cherryPick {
+				return o.Command
+			}
+		}
+		t.Fatalf("no option runs %q (cherry-pick %v): %+v", prefix, cherryPick, opts)
+		return ""
+	}
+	clk.Advance(time.Minute)
+	r, err := ea.Start(ctx, in)
+	must(t, err)
+	flowWant(t, "start", r.Result, api.Refused)
+	if out, err := sh(command(r.Options, "git switch -c ", true)); err == nil {
+		t.Fatalf("the move did not stop on a conflict:\n%s", out)
+	}
+	leftover := runGit(t, f.a, "branch", "--show-current")
+	runGit(t, f.a, "cherry-pick", "--abort")
+	runGit(t, f.a, "switch", "-q", old)
+
+	// Given the branch left over, start refuses at once.
+	clk.Advance(time.Minute)
+	given, err := ea.Start(ctx, api.StartInput{Intent: in.Intent, Branch: leftover})
+	must(t, err)
+	flowWant(t, "start on the branch left over", given.Result, api.Refused)
+	if !strings.Contains(given.Summary, "already exists") || flowHasCommand(given.Options, "git switch -c") ||
+		!flowHasTool(given.Options, "start", "intent", in.Intent, "branch", leftover+"-2") {
+		t.Errorf("start on the branch left over:\n%s", render.Text(&given.Result, render.CLI))
+	}
+
+	clk.Advance(time.Minute)
+	again, err := ea.Start(ctx, in)
+	must(t, err)
+	flowWant(t, "start again", again.Result, api.Refused)
+	keep := command(again.Options, "git switch -c ", false)
+	if want := "git switch -c " + leftover + "-2"; keep != want || !strings.HasPrefix(command(again.Options, want+" ", true), want) {
+		t.Fatalf("start again offers %q, want %q:\n%s", keep, want, render.Text(&again.Result, render.CLI))
+	}
+	if out, err := sh(keep); err != nil {
+		t.Fatalf("%s: %v\n%s", keep, err, out)
+	}
+	r, err = ea.Start(ctx, in)
+	must(t, err)
+	flowWant(t, "start on the branch kept", r.Result, api.OK)
+	if r.Data.NewBranch || r.Data.Branch != leftover+"-2" {
+		t.Errorf("start on the branch kept: branch %q (new %v), want to stay on %s-2", r.Data.Branch, r.Data.NewBranch, leftover)
+	}
+}
+
 // A provisional item is one gitlet opened for the branch the agent was on:
 // abandoning it does not make that branch a finished task's.
 func TestFlowStartStaysAfterAbandoningAProvisionalItem(t *testing.T) {

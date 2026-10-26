@@ -112,12 +112,26 @@ func (e *Engine) doStart(ctx context.Context, in api.StartInput) (*api.Reply[api
 				fromName += " " + shortOID(from)
 			}
 			// The refusal has the agent create the branch and call start
-			// again. With no item to adopt, a fresh id would name another
+			// again, so a branch given is refused first when it cannot be
+			// created. With no item to adopt, a fresh id would name another
 			// branch on every call, so it names one from the task left and
-			// the intent.
+			// the intent. A move that stopped on a conflict leaves the
+			// branch it named behind: the name is the first free one.
 			offer := name
-			if strings.TrimSpace(in.Branch) == "" && adopt == nil {
-				offer = defaultBranchName(e.cfg.BranchPrefix, intent, model.ItemID(model.ContentID(string(left.Item.ID), intent)))
+			if strings.TrimSpace(in.Branch) != "" {
+				if refusal, err := e.branchRefusal(ctx, name, intent); err != nil || refusal != nil {
+					if refusal != nil {
+						return reply(*refusal, none), nil
+					}
+					return nil, err
+				}
+			} else {
+				if adopt == nil {
+					offer = defaultBranchName(e.cfg.BranchPrefix, intent, model.ItemID(model.ContentID(string(left.Item.ID), intent)))
+				}
+				if offer, err = e.freeBranchName(ctx, offer); err != nil {
+					return nil, fmt.Errorf("engine: start: %w", err)
+				}
 			}
 			if refusal, err := e.leftBehindRefusal(ctx, left, cur, offer, from, intent); err != nil || refusal != nil {
 				if refusal != nil {
@@ -555,22 +569,8 @@ func prSuffix(pr string) string {
 // carrying uncommitted changes along. Problems the agent can fix are
 // refusals.
 func (e *Engine) createWorkBranch(ctx context.Context, name, from, intent string) (*api.Result, error) {
-	if _, err := e.repo.Run(ctx, "check-ref-format", "--branch", name); err != nil {
-		r := refused(fmt.Sprintf("%q is not a valid branch name.", name), nil,
-			toolOption("let gitlet name the branch", "start", "intent", intent))
-		return &r, nil
-	}
-	exists, err := e.repo.BranchExists(ctx, name)
-	if err != nil {
-		return nil, fmt.Errorf("engine: start: %w", err)
-	}
-	if exists {
-		opts := []model.Option{toolOption("use another branch name", "start", "intent", intent, "branch", name+"-2")}
-		if _, finished := e.finishedBranchItem(ctx, name); !finished {
-			opts = append(opts, cmdOption("or switch to it and start there", "git switch "+shellQuote(name)))
-		}
-		r := refused(fmt.Sprintf("Branch %s already exists.", name), nil, opts...)
-		return &r, nil
+	if refusal, err := e.branchRefusal(ctx, name, intent); err != nil || refusal != nil {
+		return refusal, err
 	}
 	if err := e.repo.CreateBranch(ctx, name, from); err != nil {
 		var gerr *gitx.Error
@@ -583,6 +583,47 @@ func (e *Engine) createWorkBranch(ctx context.Context, name, from, intent string
 		return nil, fmt.Errorf("engine: start: %w", err)
 	}
 	return nil, nil
+}
+
+// branchRefusal refuses a branch name start cannot create: one git does
+// not take, or one a branch has already, for which it offers the first
+// free name after it.
+func (e *Engine) branchRefusal(ctx context.Context, name, intent string) (*api.Result, error) {
+	if _, err := e.repo.Run(ctx, "check-ref-format", "--branch", name); err != nil {
+		r := refused(fmt.Sprintf("%q is not a valid branch name.", name), nil,
+			toolOption("let gitlet name the branch", "start", "intent", intent))
+		return &r, nil
+	}
+	exists, err := e.repo.BranchExists(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("engine: start: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	other, err := e.freeBranchName(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("engine: start: %w", err)
+	}
+	opts := []model.Option{toolOption("use another branch name", "start", "intent", intent, "branch", other)}
+	if _, finished := e.finishedBranchItem(ctx, name); !finished {
+		opts = append(opts, cmdOption("or switch to it and start there", "git switch "+shellQuote(name)))
+	}
+	r := refused(fmt.Sprintf("Branch %s already exists.", name), nil, opts...)
+	return &r, nil
+}
+
+// freeBranchName is the first of name, name-2, name-3 and on that no
+// branch has.
+func (e *Engine) freeBranchName(ctx context.Context, name string) (string, error) {
+	free := name
+	for n := 2; ; n++ {
+		exists, err := e.repo.BranchExists(ctx, free)
+		if err != nil || !exists {
+			return free, err
+		}
+		free = name + "-" + strconv.Itoa(n)
+	}
 }
 
 // defaultBranchName is <prefix><slug>-<4 hex of the item>.

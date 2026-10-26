@@ -488,8 +488,11 @@ A work item is one task on one branch in one worktree.
   commits on a new branch, with `git stash` around that when uncommitted
   changes would stop the move. With no provisional item to adopt, the
   branch it names takes its 4 hex from the closed item and the intent, not
-  from a new item, so calling `start` again names the same branch. Its
-  result lists:
+  from a new item, so calling `start` again names the same branch. When a
+  branch has that name already, such as one a move that stopped on a
+  conflict left behind, it names the first free one of `<name>-2`,
+  `<name>-3` and on instead. A `branch` given that exists is refused before
+  any of this, with the first free name after it. Its result lists:
   - active items with similar intent (section 10.2),
   - items and claims touching `paths`,
   - commits on main from the last 7 days with similar subjects ("already
