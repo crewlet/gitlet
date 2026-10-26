@@ -228,7 +228,9 @@ func (b *Bus) DeleteOwn(ctx context.Context) error { return b.deleteOwn(ctx) }
 
 // Flush pushes own refs whose local oid differs from the last pushed one
 // (after the remote was unreachable), and recreates own refs the remote lost.
-// It skips an update the remote already rejected in this process.
+// It skips an update the remote already rejected in this process. Each
+// rejection is a *RejectedError naming the ref in the returned error; a
+// rejected snapshot also moves the local wip ref back, as in WriteWip.
 func (b *Bus) Flush(ctx context.Context) error { return b.flush(ctx) }
 
 // ---- claims ----

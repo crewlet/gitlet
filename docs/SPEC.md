@@ -338,7 +338,9 @@ The server's instructions summarize the workflow in section 13.
   - "remote rejected" or a declined pre-receive hook on wip: record
     `snapshotError` with the remote's text in the item, exclude the paths it
     names, and keep publishing state and outbox. The local wip ref goes back
-    to the snapshot last pushed, so the rejected one is never pushed again;
+    to the snapshot last pushed, also when the rejected one was written
+    during an outage and flushed later (section 6.3), so it is never pushed
+    again;
   - the same on state, outbox or the deletion of an own ref: the local write
     stands, but flushing after an outage (section 6.3) does not retry the
     rejected value; the next write is pushed as usual;

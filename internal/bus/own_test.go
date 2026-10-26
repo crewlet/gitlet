@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -370,6 +371,50 @@ func TestFlushSkipsRejectedWip(t *testing.T) {
 	if pushes := repo.pushLog()[before:]; len(pushes) != 0 {
 		t.Fatalf("Flush pushed the rejected snapshots again: %+v", pushes)
 	}
+
+	// Snapshots written while the remote was unreachable and rejected by the
+	// flush that pushes them once it is back go back the same way, and the
+	// flush returns their rejections.
+	e.remote.setDown(true)
+	snap4 := e.store.commit("f.go", []byte("package f // 4"), "gitlet: snapshot", snap)
+	snap5 := e.store.commit("g.go", []byte("package g // 5"), "gitlet: snapshot")
+	for item, s := range map[model.ItemID]string{itemA: snap4, itemB: snap5} {
+		if err := b.WriteWip(ctx, item, s); !isNet(err) {
+			t.Fatalf("WriteWip(%s) offline: %v", item, err)
+		}
+	}
+	e.remote.setDown(false)
+	err := b.Flush(ctx)
+	for _, item := range []model.ItemID{itemA, itemB} {
+		if !hasRejection(err, WipRef(agentA, item)) {
+			t.Errorf("Flush: %v, want a RejectedError for %s", err, item)
+		}
+	}
+	if got := repo.ref(WipRef(agentA, itemA)); got != snap {
+		t.Fatalf("local wip after the rejected flush = %q, want it back at the published %q", got, snap)
+	}
+	if got := repo.ref(WipRef(agentA, itemB)); got != "" {
+		t.Fatalf("local wip of a never published item after the rejected flush = %q, want none", got)
+	}
+	before = len(repo.pushLog())
+	mustNoErr(t, b.Flush(ctx))
+	mustNoErr(t, e.bus(repo, agentA, withPushLog(log)).Flush(ctx))
+	if pushes := repo.pushLog()[before:]; len(pushes) != 0 {
+		t.Fatalf("Flush pushed the snapshots rejected by a flush again: %+v", pushes)
+	}
+}
+
+// hasRejection reports whether err holds a *RejectedError for ref.
+func hasRejection(err error, ref string) bool {
+	switch x := err.(type) {
+	case *RejectedError:
+		return x.Ref == ref
+	case interface{ Unwrap() []error }:
+		return slices.ContainsFunc(x.Unwrap(), func(e error) bool { return hasRejection(e, ref) })
+	case interface{ Unwrap() error }:
+		return hasRejection(x.Unwrap(), ref)
+	}
+	return false
 }
 
 // TestFlushSkipsRejectedDocs: a state write or a deletion the remote

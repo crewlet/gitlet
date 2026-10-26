@@ -367,6 +367,12 @@ func (b *Bus) flush(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("bus: flush: %w", errors.Join(append(errs, err)...))
 		}
+		var rej *RejectedError
+		if u.oid != "" && errors.As(perRef[0], &rej) {
+			// A snapshot written while the remote was unreachable goes
+			// back as in writeWip; a rejected deletion stands.
+			b.unwriteWip(ctx, u.ref, u.oid)
+		}
 		errs = append(errs, perRef...)
 	}
 	if err := errors.Join(errs...); err != nil {
