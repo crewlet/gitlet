@@ -432,8 +432,9 @@ func (e *Engine) pushWip(ctx context.Context, item model.ItemID) (snapErr string
 
 // footprint returns the footprint of head against base (footprint.Compute,
 // docs/SPEC.md, section 9), from the ledger's cache when it holds the pair
-// (key base..head), storing new ones. Files are parsed through the
-// in-memory extraction cache. Use it for any item, branch or stub.
+// (keyed by footprint.Version and base..head), storing new ones. Files are
+// parsed through the in-memory extraction cache. Use it for any item,
+// branch or stub.
 func (e *Engine) footprint(ctx context.Context, base, head string) (model.Footprint, error) {
 	return e.cachedFootprint(ctx, "", base, head, 0)
 }
@@ -441,7 +442,7 @@ func (e *Engine) footprint(ctx context.Context, base, head string) (model.Footpr
 // cachedFootprint is footprint with a cache key prefix and a cap on parsed
 // files (main's footprint uses both).
 func (e *Engine) cachedFootprint(ctx context.Context, prefix, base, head string, maxParsed int) (model.Footprint, error) {
-	key := prefix + base + ".." + head
+	key := fmt.Sprintf("v%d:%s%s..%s", footprint.Version, prefix, base, head)
 	if fp, ok, err := e.led.CachedFootprint(ctx, key); err == nil && ok {
 		return fp, nil
 	}

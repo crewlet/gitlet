@@ -12,6 +12,11 @@ import (
 	"github.com/crewlet/gitlet/internal/symbols"
 )
 
+// Version changes whenever Compute can give a different footprint for the
+// same two commits (new fields, classification or resolution rules), so
+// caches keyed by commits do not serve results of an older version.
+const Version = 2
+
 // Source reads files at revisions and lists changed files. *gitx.Repo
 // satisfies it; tests can use fakes.
 type Source interface {
