@@ -484,7 +484,11 @@ A work item is one task on one branch in one worktree.
   the item's, which a new branch from main would leave behind, and `start`
   rewrites no commits. The refusal offers to cherry-pick them, named one by
   one, onto the new branch from main, or to keep them on top of the item's
-  commits on a new branch. Its result lists:
+  commits on a new branch, with `git stash` around that when uncommitted
+  changes would stop the move. With no provisional item to adopt, the
+  branch it names takes its 4 hex from the closed item and the intent, not
+  from a new item, so calling `start` again names the same branch. Its
+  result lists:
   - active items with similar intent (section 10.2),
   - items and claims touching `paths`,
   - commits on main from the last 7 days with similar subjects ("already

@@ -111,7 +111,15 @@ func (e *Engine) doStart(ctx context.Context, in api.StartInput) (*api.Reply[api
 			} else {
 				fromName += " " + shortOID(from)
 			}
-			if refusal, err := e.leftBehindRefusal(ctx, left, cur, name, from, intent); err != nil || refusal != nil {
+			// The refusal has the agent create the branch and call start
+			// again. With no item to adopt, a fresh id would name another
+			// branch on every call, so it names one from the task left and
+			// the intent.
+			offer := name
+			if strings.TrimSpace(in.Branch) == "" && adopt == nil {
+				offer = defaultBranchName(e.cfg.BranchPrefix, intent, model.ItemID(model.ContentID(string(left.Item.ID), intent)))
+			}
+			if refusal, err := e.leftBehindRefusal(ctx, left, cur, offer, from, intent); err != nil || refusal != nil {
 				if refusal != nil {
 					return reply(*refusal, none), nil
 				}
@@ -422,8 +430,9 @@ func (e *Engine) carryRefusal(ctx context.Context, left model.WorkItem, from, in
 // date, merges, and the item's own commits rewritten by an amend or a
 // rebase (the same patch) are no such work. It offers to move the commits,
 // named one by one, onto the new branch name from main, or to keep them on
-// top of the item's commits on that name. A submitted item's later commits
-// are its review fixes and stay with it.
+// top of the item's commits on that name, setting uncommitted changes
+// aside around that when the move would overwrite them. A submitted item's
+// later commits are its review fixes and stay with it.
 func (e *Engine) leftBehindRefusal(ctx context.Context, left finishedBranch, cur, name, from, intent string) (*api.Result, error) {
 	if left.Head == "" {
 		return nil, nil
@@ -448,15 +457,40 @@ func (e *Engine) leftBehindRefusal(ctx context.Context, left finishedBranch, cur
 	if len(picks) == 0 {
 		return nil, nil
 	}
+	// git switch refuses to overwrite uncommitted changes to a file main
+	// has otherwise, and cherry-pick refuses to start over staged ones.
+	differ, err := e.repo.DiffNames(ctx, "HEAD", from)
+	if err != nil {
+		return nil, fmt.Errorf("engine: start: %w", err)
+	}
+	blocked, err := e.dirtyPaths(ctx, differ)
+	if err != nil {
+		return nil, err
+	}
+	staged, err := e.stagedPaths(ctx)
+	if err != nil {
+		return nil, err
+	}
+	aside := append(blocked, staged...)
+	sort.Strings(aside)
+	aside = compactStrings(aside)
+
 	it := left.Item
+	details := []string{fmt.Sprintf("branch %s belongs to your %s task%s, so a new task starts from %s, without %s",
+		cur, it.Status, prSuffix(it.PR), e.mainUpstream(), joinCapped(names, maxDetailNames))}
+	move := cmdOption("move them onto a new branch from "+e.mainUpstream(),
+		"git switch -c "+shellQuote(name)+" "+shellQuote(from)+" && git cherry-pick "+strings.Join(picks, " "))
+	keep := cmdOption("or keep them on top of that task's commits, on a new branch", "git switch -c "+shellQuote(name))
+	again := toolOption("then start again", "start", "intent", intent)
+	opts := []model.Option{move, keep, again}
+	if len(aside) > 0 {
+		details = append(details, fmt.Sprintf("your uncommitted changes to %s would stop the move: set them aside around it", joinCapped(aside, maxDetailNames)))
+		move.Label = "then " + move.Label
+		opts = []model.Option{cmdOption("set your uncommitted changes aside", "git stash push --include-untracked"),
+			move, keep, cmdOption("then bring your changes back", "git stash pop"), again}
+	}
 	r := refused(fmt.Sprintf("Cannot start a new branch from %s: it would leave behind %s made on %s since your %s task %q ended.",
-		e.mainUpstream(), pluralize(len(picks), "commit"), cur, it.Status, it.Intent),
-		[]string{fmt.Sprintf("branch %s belongs to your %s task%s, so a new task starts from %s, without %s",
-			cur, it.Status, prSuffix(it.PR), e.mainUpstream(), joinCapped(names, maxDetailNames))},
-		cmdOption("move them onto a new branch from "+e.mainUpstream(),
-			"git switch -c "+shellQuote(name)+" "+shellQuote(from)+" && git cherry-pick "+strings.Join(picks, " ")),
-		cmdOption("or keep them on top of that task's commits, on a new branch", "git switch -c "+shellQuote(name)),
-		toolOption("then start again", "start", "intent", intent))
+		e.mainUpstream(), pluralize(len(picks), "commit"), cur, it.Status, it.Intent), details, opts...)
 	return &r, nil
 }
 

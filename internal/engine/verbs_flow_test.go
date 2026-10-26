@@ -1889,6 +1889,75 @@ func TestFlowStartLeavesMainsCommitsAndMergesBehind(t *testing.T) {
 	}
 }
 
+// Moving commits off a finished task's branch would overwrite uncommitted
+// changes to the files they touch: the refusal sets the changes aside
+// around the move, and names the same branch each time start is called,
+// so the agent can follow it.
+func TestFlowStartMovesCommitsAroundUncommittedChanges(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	main := runGit(t, f.a, "rev-parse", "origin/main")
+
+	_, old := flowStart(t, ctx, ea, "Rename the default configuration file")
+	flowCommit(t, f.a, "default: rename", "default.go", strings.Replace(mainGo, "gitlet.toml", "settings.toml", 1))
+	ab, err := ea.Abandon(ctx, api.AbandonInput{})
+	must(t, err)
+	flowWant(t, "abandon", ab.Result, api.OK)
+	flowCommit(t, f.a, "B", "b.go", "package config\n\nfunc B() int { return 1 }\n")
+	edited := "package config\n\nfunc B() int { return 2 }\n"
+	writeFile(t, f.a, "b.go", edited)
+
+	clk.Advance(time.Minute)
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Add function B"})
+	must(t, err)
+	flowWant(t, "start", r.Result, api.Refused)
+	clk.Advance(time.Minute)
+	again, err := ea.Start(ctx, api.StartInput{Intent: "Add function B"})
+	must(t, err)
+	flowWant(t, "start again", again.Result, api.Refused)
+	commands := func(opts []model.Option) (cs []string) {
+		for _, o := range opts {
+			cs = append(cs, o.Command)
+		}
+		return cs
+	}
+	if !slices.Equal(commands(again.Options), commands(r.Options)) {
+		t.Errorf("start again offers %q, first %q", commands(again.Options), commands(r.Options))
+	}
+
+	// Set aside, moved and brought back as the options say, in their order.
+	var steps []string
+	for _, c := range commands(r.Options) {
+		if strings.Contains(c, "git stash") || strings.Contains(c, "git cherry-pick") {
+			steps = append(steps, c)
+		}
+	}
+	if len(steps) != 3 || !strings.HasPrefix(steps[0], "git stash push") || !strings.Contains(steps[1], "git cherry-pick") || steps[2] != "git stash pop" {
+		t.Fatalf("options %+v", r.Options)
+	}
+	for _, s := range steps {
+		if out, err := exec.Command("sh", "-c", "cd '"+f.a+"' && "+s).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", s, err, out)
+		}
+	}
+	moved := runGit(t, f.a, "branch", "--show-current")
+	r, err = ea.Start(ctx, api.StartInput{Intent: "Add function B"})
+	must(t, err)
+	flowWant(t, "start after the move", r.Result, api.OK)
+	if r.Data.Branch != moved || moved == old {
+		t.Errorf("start after the move: branch %q, want to stay on %q", r.Data.Branch, moved)
+	}
+	if got := runGit(t, f.a, "log", "--format=%s", main+"..HEAD"); got != "B" {
+		t.Errorf("%s holds %q on top of main, want only B", moved, got)
+	}
+	if b, err := os.ReadFile(filepath.Join(f.a, "b.go")); err != nil || string(b) != edited {
+		t.Errorf("b.go after the move: %q (%v), want the uncommitted edit back", b, err)
+	}
+}
+
 // A provisional item is one gitlet opened for the branch the agent was on:
 // abandoning it does not make that branch a finished task's.
 func TestFlowStartStaysAfterAbandoningAProvisionalItem(t *testing.T) {
