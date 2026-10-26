@@ -588,9 +588,11 @@ Unique names within a file:
 Hashes:
 
 - **Body hash** covers the tree-sitter leaf tokens of the definition with
-  comments dropped, so reformatting is not a change. A container's body hash
-  replaces each nested definition with its key, so editing one method does not
-  change its class.
+  comments dropped, so reformatting is not a change. Python's indentation is
+  syntax but has no leaf tokens, so the start and end of each block count as
+  tokens: moving a statement into or out of a block is a change, reindenting
+  is not. A container's body hash replaces each nested definition with its
+  key, so editing one method does not change its class.
 - **Signature hash** covers the structural signature (9.3).
 
 Change kinds, comparing old and new symbols by key:

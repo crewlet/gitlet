@@ -248,7 +248,9 @@ func (b *builder) NormSkip(n *sitter.Node, skip func(*sitter.Node) bool) string 
 // left out (so a renamed symbol keeps its body hash and can be paired), and
 // tokens that formatters add or remove without changing meaning are dropped:
 // statement semicolons in Go, TypeScript and JavaScript, and a comma right
-// before a closing bracket.
+// before a closing bracket. Python's indentation tokens have no text, so each
+// block is wrapped in markers instead: moving a statement into or out of a
+// block changes the hash, reindenting does not.
 func (b *builder) bodyTokens(n *sitter.Node, nested []*sitter.Node, name string) string {
 	type span struct{ start, end uint }
 	skip := make(map[span]bool, len(nested))
@@ -259,7 +261,7 @@ func (b *builder) bodyTokens(n *sitter.Node, nested []*sitter.Node, name string)
 		}
 	}
 	var toks []string
-	b.leaves(n, func(c *sitter.Node) bool {
+	b.tokens(n, func(c *sitter.Node) bool {
 		if len(skip) == 0 || c.Id() == n.Id() {
 			return false
 		}
@@ -269,7 +271,7 @@ func (b *builder) bodyTokens(n *sitter.Node, nested []*sitter.Node, name string)
 			return true
 		}
 		return false
-	}, func(tok string) { toks = append(toks, tok) })
+	}, func(tok string) { toks = append(toks, tok) }, b.lang == "python")
 
 	dropSemicolons := optionalSemicolons(b.lang)
 	var sb strings.Builder
@@ -310,6 +312,19 @@ func isClosing(tok string) bool {
 // leaves calls emit for every leaf token under n in source order, dropping
 // comments. String-like nodes are emitted whole so their inner spacing counts.
 func (b *builder) leaves(n *sitter.Node, skip func(*sitter.Node) bool, emit func(string)) {
+	b.tokens(n, skip, emit, false)
+}
+
+// Markers around the statements of a Python block in body tokens. They
+// cannot occur in source text.
+const (
+	blockOpen  = "\x02"
+	blockClose = "\x03"
+)
+
+// tokens is leaves, also emitting blockOpen and blockClose around the
+// children of every Python block when blocks is set.
+func (b *builder) tokens(n *sitter.Node, skip func(*sitter.Node) bool, emit func(string), blocks bool) {
 	if n == nil {
 		return
 	}
@@ -326,8 +341,15 @@ func (b *builder) leaves(n *sitter.Node, skip func(*sitter.Node) bool, emit func
 		}
 		return
 	}
+	block := blocks && kind == "block"
+	if block {
+		emit(blockOpen)
+	}
 	for i := uint(0); i < n.ChildCount(); i++ {
-		b.leaves(n.Child(i), skip, emit)
+		b.tokens(n.Child(i), skip, emit, blocks)
+	}
+	if block {
+		emit(blockClose)
 	}
 }
 

@@ -684,6 +684,48 @@ def helper( x ):
 	}
 }
 
+// TestPythonBodyHashIndentation checks that indentation, which is syntax in
+// Python, counts in the body hash where it changes which block a statement
+// belongs to, and nowhere else.
+func TestPythonBodyHashIndentation(t *testing.T) {
+	tests := []struct {
+		name     string
+		old, new string
+		same     bool
+	}{
+		{"statement moved into an if block",
+			"def f(x):\n    if x:\n        a()\n    b()\n",
+			"def f(x):\n    if x:\n        a()\n        b()\n", false},
+		{"statement moved out of a loop",
+			"def f(xs):\n    for x in xs:\n        a(x)\n        b()\n",
+			"def f(xs):\n    for x in xs:\n        a(x)\n    b()\n", false},
+		{"else block taken over by a nested if",
+			"def f(x, y):\n    if x:\n        if y:\n            a()\n    else:\n        b()\n",
+			"def f(x, y):\n    if x:\n        if y:\n            a()\n        else:\n            b()\n", false},
+		{"method statement moved into a with block",
+			"class C:\n    def m(self):\n        with lock:\n            a()\n        b()\n",
+			"class C:\n    def m(self):\n        with lock:\n            a()\n            b()\n", false},
+		{"one-line block written on its own line",
+			"def f(x):\n    if x: a()\n    b()\n",
+			"def f(x):\n    if x:\n        a()\n    b()\n", true},
+		{"indented with tabs instead of spaces",
+			"def f(x):\n    if x:\n        a()\n    b()\n",
+			"def f(x):\n\tif x:\n\t\ta()\n\tb()\n", true},
+		{"blank lines and comments between statements",
+			"def f(x):\n    if x:\n        a()\n    b()\n",
+			"def f(x):\n\n    if x:\n        # a first\n        a()\n\n    b()  # then b\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old, cur := pyTestExtract(t, "m.py", tt.old), pyTestExtract(t, "m.py", tt.new)
+			q := old.Symbols[len(old.Symbols)-1].Qualified
+			if got := pyTestSymbol(t, old, q).BodyHash == pyTestSymbol(t, cur, q).BodyHash; got != tt.same {
+				t.Errorf("%s: body hash same = %v, want %v", q, got, tt.same)
+			}
+		})
+	}
+}
+
 func TestPythonRefs(t *testing.T) {
 	tests := []struct {
 		name, src string
