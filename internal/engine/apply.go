@@ -285,8 +285,8 @@ func (e *Engine) reap(ctx context.Context) error {
 		return nil
 	}
 	e.lastReap = now
-	gone := func(ref string, lease int) bool {
-		lp := e.refLapse(ctx, ref, lease, now)
+	gone := func(ref, oid string, lease int) bool {
+		lp := e.refLapse(ctx, ref, oid, lease, now)
 		return lp.Lapsed && lp.For >= e.cfg.ReapAfter
 	}
 	refs := map[string]string{}
@@ -295,7 +295,7 @@ func (e *Engine) reap(ctx context.Context) error {
 		if st, ok := e.shared.Agents[id]; ok {
 			ref, lease = bus.StateRef(id), st.LeaseSeconds
 		}
-		if !gone(ref, lease) {
+		if !gone(ref, e.shared.Refs[ref], lease) {
 			continue
 		}
 		for _, r := range []string{bus.StateRef(id), bus.OutboxRef(id)} {
@@ -314,7 +314,7 @@ func (e *Engine) reap(ctx context.Context) error {
 		}
 	}
 	for key, cv := range e.shared.Claims {
-		if cv.Claim.Owner != e.me.ID && !needed[key] && gone(bus.ClaimRef(key), cv.Claim.LeaseSeconds) {
+		if cv.Claim.Owner != e.me.ID && !needed[key] && gone(bus.ClaimRef(key), cv.OID, cv.Claim.LeaseSeconds) {
 			refs[bus.ClaimRef(key)] = cv.OID
 		}
 	}

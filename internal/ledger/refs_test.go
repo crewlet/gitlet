@@ -36,6 +36,9 @@ func TestObserveRefs(t *testing.T) {
 		if !reflect.DeepEqual(obs.FirstSeen, s.want) || !obs.LastFetch.Equal(s.at) {
 			t.Fatalf("%s: ObserveRefs = %v, %v; want %v, %v", s.name, obs.FirstSeen, obs.LastFetch, s.want, s.at)
 		}
+		if !reflect.DeepEqual(obs.OIDs, s.current) {
+			t.Fatalf("%s: ObserveRefs oids = %v, want %v", s.name, obs.OIDs, s.current)
+		}
 		stored, err := l.Observed(ctx, ns)
 		if err != nil {
 			t.Fatal(err)
@@ -64,7 +67,7 @@ func TestObserveRefsNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Observation{FirstSeen: map[string]time.Time{"refs/gitlet/agents/a": t0}, LastFetch: t0}); !reflect.DeepEqual(obs, want) {
+	if want := (Observation{FirstSeen: map[string]time.Time{"refs/gitlet/agents/a": t0}, OIDs: map[string]string{"refs/gitlet/agents/a": "1"}, LastFetch: t0}); !reflect.DeepEqual(obs, want) {
 		t.Fatalf("Observed(refs/gitlet/) = %+v, want %+v", obs, want)
 	}
 	empty, err := l.Observed(ctx, "refs/unknown/")
@@ -79,8 +82,8 @@ func TestObserveRefsNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	for ns, want := range map[string]Observation{
-		"refs/gitlet/": {FirstSeen: map[string]time.Time{"refs/gitlet/agents/a": woke}, LastFetch: t0},
-		"refs/heads/":  {FirstSeen: map[string]time.Time{"refs/heads/main": woke}, LastFetch: t1},
+		"refs/gitlet/": {FirstSeen: map[string]time.Time{"refs/gitlet/agents/a": woke}, OIDs: map[string]string{"refs/gitlet/agents/a": "1"}, LastFetch: t0},
+		"refs/heads/":  {FirstSeen: map[string]time.Time{"refs/heads/main": woke}, OIDs: map[string]string{"refs/heads/main": "m"}, LastFetch: t1},
 	} {
 		got, err := l.Observed(ctx, ns)
 		if err != nil || !reflect.DeepEqual(got, want) {

@@ -358,10 +358,17 @@ func judgeLapse(firstSeen, lastFetch, now time.Time, lease, fresh time.Duration)
 	return lapse{Lapsed: true, Since: firstSeen, For: observed - lease}
 }
 
-// refLapse judges a canonical ref (bus.StateRef, bus.ClaimRef, ...) with
-// the lease its document states (seconds; 0 means the configured lease).
-func (e *Engine) refLapse(ctx context.Context, ref string, leaseSecs int, now time.Time) lapse {
+// refLapse judges a canonical ref (bus.StateRef, bus.ClaimRef, ...) at oid,
+// the oid in view, with the lease its document states (seconds; 0 means
+// the configured lease). First-seen times are per oid: the shared state
+// can reach an oid before the observations do (a tick fetches without
+// e.mu, a lost claim write reloads), and such an oid was only just seen,
+// so it has not lapsed.
+func (e *Engine) refLapse(ctx context.Context, ref, oid string, leaseSecs int, now time.Time) lapse {
 	obs := e.observation(ctx)
+	if obs.OIDs[ref] != oid {
+		return lapse{}
+	}
 	lease := time.Duration(leaseSecs) * time.Second
 	if lease <= 0 {
 		lease = e.cfg.Lease

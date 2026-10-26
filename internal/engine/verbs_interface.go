@@ -130,9 +130,6 @@ func (e *Engine) doClaim(ctx context.Context, in api.ClaimInput) (*api.Reply[api
 	}
 	e.appendEvent(ctx, "claim", map[string]any{"symbol": ref, "epoch": view.Claim.Epoch, "item": item, "takeover": held && !mine})
 	ci := e.claimInfo(ctx, view, e.now())
-	// Its lease starts now. The ref observations still describe the oid it
-	// replaced until the next refresh, which would call a takeover lapsed.
-	ci.Lapsed = false
 	details = append(claimLines(ci), details...)
 	return reply(okResult(summary, details...), api.ClaimData{Claim: ci}), nil
 }
@@ -255,7 +252,7 @@ func (e *Engine) claimsOffline() bool {
 // claimLapsed judges a claim's lease on observed time (docs/SPEC.md,
 // section 8).
 func (e *Engine) claimLapsed(ctx context.Context, cv bus.ClaimView) bool {
-	return e.refLapse(ctx, bus.ClaimRef(cv.Claim.Key), cv.Claim.LeaseSeconds, e.now()).Lapsed
+	return e.refLapse(ctx, bus.ClaimRef(cv.Claim.Key), cv.OID, cv.Claim.LeaseSeconds, e.now()).Lapsed
 }
 
 // contractParent is the parent a claim commit keeps: the stub of its

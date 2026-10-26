@@ -119,9 +119,9 @@ func (e *Engine) peers(ctx context.Context, now time.Time) map[model.AgentID]rul
 		st, hasState := e.shared.Agents[id]
 		var lp lapse
 		if hasState {
-			lp = e.refLapse(ctx, bus.StateRef(id), st.LeaseSeconds, now)
+			lp = e.refLapse(ctx, bus.StateRef(id), e.shared.Refs[bus.StateRef(id)], st.LeaseSeconds, now)
 		} else {
-			lp = e.refLapse(ctx, bus.OutboxRef(id), 0, now)
+			lp = e.refLapse(ctx, bus.OutboxRef(id), e.shared.Refs[bus.OutboxRef(id)], 0, now)
 		}
 		p := rules.Peer{State: st, Outbox: e.shared.Outboxes[id], Lapsed: lp.Lapsed}
 		if lp.Lapsed {
@@ -159,7 +159,7 @@ func (e *Engine) claimViews(ctx context.Context, now time.Time, withLanded bool)
 		main = e.mainOID(ctx)
 	}
 	for key, cv := range e.shared.Claims {
-		lp := e.refLapse(ctx, bus.ClaimRef(key), cv.Claim.LeaseSeconds, now)
+		lp := e.refLapse(ctx, bus.ClaimRef(key), cv.OID, cv.Claim.LeaseSeconds, now)
 		rv := rules.ClaimView{Claim: cv.Claim, OID: cv.OID, Lapsed: lp.Lapsed}
 		if lp.Lapsed {
 			since := lp.Since
@@ -559,7 +559,7 @@ func (e *Engine) waitingOn(key string) []model.AgentID {
 // for it.
 func (e *Engine) claimInfo(ctx context.Context, cv bus.ClaimView, now time.Time) api.ClaimInfo {
 	c := cv.Claim
-	lp := e.refLapse(ctx, bus.ClaimRef(c.Key), c.LeaseSeconds, now)
+	lp := e.refLapse(ctx, bus.ClaimRef(c.Key), cv.OID, c.LeaseSeconds, now)
 	return api.ClaimInfo{
 		Symbol:       c.Symbol.Ref(),
 		Owner:        c.Owner,

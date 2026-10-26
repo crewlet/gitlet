@@ -283,6 +283,61 @@ func TestIfcClaimTakesOverALapsedClaim(t *testing.T) {
 	}
 }
 
+func TestIfcClaimRenewedMeanwhileIsNotTakenOver(t *testing.T) {
+	p := newIfcPair(t, func() *Options { return &Options{Config: testConfig()} })
+	ctx := ctxT(t)
+	key := ifcKey("config.go", "Load")
+	writeFile(t, p.f.a, "config.go", ifcConfig(ifcLoadStrFn))
+	ifcStart(t, p.a, "Add a strict flag to Load")
+	r, err := p.a.Claim(ctx, api.ClaimInput{Symbol: ifcLoad})
+	must(t, err)
+	if r.Outcome != api.OK {
+		t.Fatalf("a's claim: %s %q", r.Outcome, r.Summary)
+	}
+	p.fresh()
+	ifcStart(t, p.b, "Rework config loading")
+
+	// a goes quiet for longer than the lease while b watches, then renews.
+	for range 8 {
+		p.clk.Advance(13 * time.Second)
+		must(t, p.b.Tick(ctx))
+	}
+	flowLocked(p.a, func() {
+		cv, _ := p.a.claimFor(key)
+		c := cv.Claim
+		c.UpdatedAt = p.clk.Now().UTC()
+		_, err := p.a.updateClaim(ctx, c, cv.OID, "")
+		must(t, err)
+	})
+	_, renewed, _ := ifcRemoteClaim(t, p.f, key)
+
+	// b's tracking refs reach the renewal before its ref observations do, as
+	// when a tick has fetched without the engine lock and a lost claim write
+	// reloads before that tick records the fetch.
+	p.clk.Advance(verbRefreshAfter + time.Second)
+	flowLocked(p.b, func() {
+		_, err := p.b.fetch(ctx)
+		must(t, err)
+		must(t, p.b.reload(ctx))
+		cv, _ := p.b.claimFor(key)
+		if cv.OID != renewed {
+			t.Fatalf("b sees the claim at %s, want the renewal %s", cv.OID, renewed)
+		}
+		if p.b.claimLapsed(ctx, cv) {
+			t.Error("the renewed claim is judged on when its previous version was first seen")
+		}
+	})
+	took, err := p.b.Claim(ctx, api.ClaimInput{Symbol: ifcLoad})
+	must(t, err)
+	ifcRefused(t, "claim after the holder renewed", took.Result)
+	if o, ok := ifcOption(took.Result, "claim"); ok {
+		t.Errorf("the refusal offers a takeover: %+v", o)
+	}
+	if remote, _, _ := ifcRemoteClaim(t, p.f, key); remote.Owner != p.a.Agent().ID {
+		t.Errorf("remote claim taken from a: %+v", remote)
+	}
+}
+
 func TestIfcClaimRaceHasOneWinner(t *testing.T) {
 	p := newIfcPair(t, nil)
 	ctx := ctxT(t)

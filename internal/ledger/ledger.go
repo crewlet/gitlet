@@ -120,6 +120,7 @@ func (l *Ledger) SetLastPushed(ctx context.Context, ref, oid string) error {
 // Observation is what a server knows about refs in one namespace.
 type Observation struct {
 	FirstSeen map[string]time.Time // ref -> when its current oid was first seen
+	OIDs      map[string]string    // ref -> the oid its FirstSeen is about
 	LastFetch time.Time            // last successful fetch of the namespace
 }
 

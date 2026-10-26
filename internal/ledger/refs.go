@@ -38,7 +38,9 @@ ON CONFLICT (namespace, ref) DO UPDATE SET oid = excluded.oid, first_seen = excl
 		defer forget.Close()
 
 		firstSeen := make(map[string]time.Time, len(current))
+		oids := make(map[string]string, len(current))
 		for ref, oid := range current {
+			oids[ref] = oid
 			if old, ok := stored[ref]; ok && old.oid == oid {
 				firstSeen[ref] = fromNanos(old.firstSeen)
 				continue
@@ -61,7 +63,7 @@ INSERT INTO ref_fetches (namespace, last_fetch) VALUES (?, ?)
 ON CONFLICT (namespace) DO UPDATE SET last_fetch = excluded.last_fetch`, namespace, at); err != nil {
 			return err
 		}
-		obs = Observation{FirstSeen: firstSeen, LastFetch: fromNanos(at)}
+		obs = Observation{FirstSeen: firstSeen, OIDs: oids, LastFetch: fromNanos(at)}
 		return nil
 	})
 	if err != nil {
@@ -83,10 +85,11 @@ func (l *Ledger) observed(ctx context.Context, namespace string) (Observation, e
 			return err
 		}
 		firstSeen := make(map[string]time.Time, len(stored))
+		oids := make(map[string]string, len(stored))
 		for ref, o := range stored {
-			firstSeen[ref] = fromNanos(o.firstSeen)
+			firstSeen[ref], oids[ref] = fromNanos(o.firstSeen), o.oid
 		}
-		obs = Observation{FirstSeen: firstSeen, LastFetch: fromNanos(last)}
+		obs = Observation{FirstSeen: firstSeen, OIDs: oids, LastFetch: fromNanos(last)}
 		return nil
 	})
 	if err != nil {
