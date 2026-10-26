@@ -205,7 +205,7 @@ func checkUnknown(verb string, obj map[string]any, sch *jsonschema.Schema, path 
 		if path != "" {
 			what = "fields of " + strings.TrimSuffix(path, ".")
 		}
-		return fmt.Errorf("unknown %s %s for %s. Valid %s: %s.", noun, strings.Join(unknown, ", "), verb, what, strings.Join(valid, ", "))
+		return fmt.Errorf("unknown %s %s for %s; valid %s: %s", noun, strings.Join(unknown, ", "), verb, what, strings.Join(valid, ", "))
 	}
 	for _, k := range slices.Sorted(maps.Keys(obj)) {
 		if sub, ok := obj[k].(map[string]any); ok {
@@ -235,7 +235,7 @@ func checkRequired(v api.Verb, obj map[string]any) error {
 	case 0:
 		return nil
 	case 1:
-		return fmt.Errorf("missing required argument for %s: %s.", v.Name, missing[0])
+		return fmt.Errorf("missing required argument for %s: %s", v.Name, missing[0])
 	}
-	return fmt.Errorf("missing required arguments for %s: %s.", v.Name, strings.Join(missing, ", "))
+	return fmt.Errorf("missing required arguments for %s: %s", v.Name, strings.Join(missing, ", "))
 }

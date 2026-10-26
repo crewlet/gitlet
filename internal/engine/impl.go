@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -15,10 +14,6 @@ import (
 	"github.com/crewlet/gitlet/internal/model"
 	"github.com/crewlet/gitlet/internal/rules"
 )
-
-// errNotImplemented is returned by the verbs that are not written yet
-// (verbs_interface.go, verbs_threads.go, verbs_branch.go).
-var errNotImplemented = errors.New("engine: not implemented")
 
 // impl holds the engine's state. Engine embeds it, so every field is
 // reachable as e.field from the methods on *Engine.
@@ -77,7 +72,6 @@ type impl struct {
 
 	// Snapshots and activity.
 	snap          snapRecord
-	snapLoaded    bool
 	syncedMain    string // main oid the item footprints were last synced against
 	activity      time.Time
 	activitySaved time.Time

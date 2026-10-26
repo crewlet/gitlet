@@ -60,7 +60,7 @@ func parseSymbolArg(arg string, isPath func(string) bool) (symbolQuery, error) {
 		}
 		q := model.NormalizeQualified(rest)
 		if q == "" {
-			return symbolQuery{}, fmt.Errorf("no symbol name after %s:", p)
+			return symbolQuery{}, fmt.Errorf("no symbol name after %q", p+":")
 		}
 		return symbolQuery{Path: p, Qualified: q}, nil
 	}

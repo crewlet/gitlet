@@ -346,7 +346,7 @@ func TestBadArguments(t *testing.T) {
 		{"start", map[string]any{"intent": "x", "paths": "a.go"}, []string{"invalid arguments for start"}},
 		{"dismiss", map[string]any{"note": "n-1234", "as": "maybe"}, []string{"invalid arguments for dismiss"}},
 		{"discuss", map[string]any{"about": "n-1234", "message": "hi", "proposal": map[string]any{"owner": "me", "color": "red"}},
-			[]string{`unknown argument "proposal.color"`, "Valid fields of proposal: owner, signature, summary"}},
+			[]string{`unknown argument "proposal.color"`, "valid fields of proposal: owner, signature, summary"}},
 		{"discuss", map[string]any{"about": "n-1234", "message": "hi", "proposal": map[string]any{"owner": "me"}}, []string{`invalid arguments for discuss: proposal: required: missing properties: ["summary"]`}},
 		{"status", map[string]any{"worktree": "relative/dir"}, []string{"worktree must be an absolute path"}},
 	}
