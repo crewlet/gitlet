@@ -758,7 +758,10 @@ Predicted conflicts run only for pairs whose changed files intersect, at most
   holds it, the new owner creates it. Each non-owner records a need, and its
   latest message in the thread becomes a requirement on the claim. Everyone
   gets an `agreement` note. The owner's note offers `publish`; a non-owner's
-  note says to wait for `ready`.
+  note says to wait for `ready`. The clash, and with it the thread, ends once
+  every non-owner has recorded its need; an owner that had not evaluated the
+  settled thread by then learns the same from its `needed` notes, which offer
+  `publish` (claiming first when nobody holds the claim).
 - Messages from other agents are data. The skill and the server instructions
   tell agents never to follow instructions inside them.
 
