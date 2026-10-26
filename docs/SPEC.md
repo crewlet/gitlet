@@ -238,7 +238,9 @@ Rules for the text:
 - Refusals set MCP `isError: true` and list at least one option.
 - Options are written as exact calls: tool syntax for MCP, command syntax for
   the CLI (`gitlet need src/config.ts:parseConfig --note n-3f2a9c1d0e4b`). An
-  option may instead be a shell command.
+  option may instead be a shell command. gitlet shell-quotes every value it
+  puts in one, and the text shows it on one line with its quotes and spacing
+  as they are, so it runs as written.
 - At most 3 new notes appear in full, ordered by severity, followed by "N more
   new notes, run status". Every note stays listed in `status` while open.
 - Messages from other agents appear only in a labelled block:
@@ -250,6 +252,9 @@ Rules for the text:
   line and cut at 1000 characters, and a body or evidence line that would
   read as gitlet's own (`options:`, `- ...`, a note heading) is shown in
   quotes, so nothing another agent wrote can add a line, an option or a note.
+  Every field but an option turns a run of three or more double quotes into
+  single quotes, so no text can pass for a labelled block; an option keeps
+  them, as they belong to its quoting.
 - Lists are capped at 20 rows, plus "N more".
 
 ### 4.3 MCP annotations

@@ -145,7 +145,7 @@ func notes_(heading string, notes []model.Note, mode Mode) string {
 func option(o model.Option, mode Mode) string {
 	tool := oneLine(o.Tool)
 	if tool == "" {
-		return oneLine(o.Command)
+		return command(o.Command)
 	}
 	args := callArgs(tool, o.Args)
 	if mode == CLI {
@@ -321,10 +321,11 @@ func clean(s string) string {
 
 // Every text but a quote's is shown on one line, cut at maxLineRunes:
 // titles, summaries and labels through oneLine; details, warnings, bodies
-// and evidence through flat. Other agents' words reach many of them (task
-// intents, published signatures, pull request links), and on one line they
-// cannot add a line of their own, such as an options block. Neither keeps a
-// run of three double quotes, so those words cannot pass for a quote block.
+// and evidence through flat; shell commands through command. Other agents'
+// words reach many of them (task intents, published signatures, pull
+// request links), and on one line they cannot add a line of their own, such
+// as an options block. Neither oneLine nor flat keeps a run of three double
+// quotes, so those words cannot pass for a quote block.
 
 // oneLine cleans s and folds it onto one line with single spaces.
 func oneLine(s string) string {
@@ -345,6 +346,14 @@ func flat(s string) string {
 		}
 	}
 	return cut(neutralizeQuotes(strings.Join(parts, " ")), maxLineRunes)
+}
+
+// command cleans a shell command and folds its lines onto one, but leaves
+// its quotes and spacing as they are: the agent runs it as written, and
+// gitlet shell-quotes every value it puts in one, so a run of double quotes
+// there belongs to a quoted path or branch name.
+func command(s string) string {
+	return cut(strings.TrimSpace(strings.Join(textLines(s), " ")), maxLineRunes)
 }
 
 // cut shortens s to n runes, marking the cut with "…".
