@@ -257,7 +257,9 @@ func mergeServer(fields []field) func(*object) (bool, error) {
 
 // mergeClaudeHooks adds gitlet's Claude Code hooks to settings. An event
 // that already runs gitlet's hook keeps its entry, with the command brought
-// up to date; other hooks are left alone.
+// up to date; other hooks are left alone. Like the git hooks, the commands
+// do nothing when gitlet is missing, since the settings are shared with
+// teammates who may not have it.
 func mergeClaudeHooks(bin string) func(*object) (bool, error) {
 	return func(root *object) (bool, error) {
 		hooks, changed, err := childObject(root, "hooks", "hooks")
@@ -265,7 +267,7 @@ func mergeClaudeHooks(bin string) func(*object) (bool, error) {
 			return false, err
 		}
 		for _, h := range claudeHooks {
-			cmd := shellQuote(bin) + " hook claude-code " + h.arg
+			cmd := guarded(shellQuote(bin), "hook claude-code "+h.arg)
 			groups, err := childArray(hooks, h.event, "hooks."+h.event)
 			if err != nil {
 				return false, err
@@ -430,8 +432,14 @@ func hookScript(bin, name string) string {
 
 // hookLine is the line to add by hand to a hook gitlet does not own.
 func hookLine(bin, name string) string {
-	q := shellQuote(bin)
-	return "command -v " + q + " >/dev/null 2>&1 && " + q + " hook git " + name + ` "$@" || true`
+	return guarded(shellQuote(bin), "hook git "+name+` "$@"`)
+}
+
+// guarded is a shell command that runs the gitlet binary q (in shell
+// syntax) with args and never fails: it does nothing when q is missing and
+// ignores gitlet's exit status (docs/SPEC.md, section 14.2).
+func guarded(q, args string) string {
+	return "command -v " + q + " >/dev/null 2>&1 && " + q + " " + args + " || true"
 }
 
 func isGitletHook(data []byte) bool {

@@ -34,7 +34,7 @@ const settingsJSON = `{
         "hooks": [
           {
             "type": "command",
-            "command": "gitlet hook claude-code session-start"
+            "command": "command -v gitlet >/dev/null 2>&1 && gitlet hook claude-code session-start || true"
           }
         ]
       }
@@ -44,7 +44,7 @@ const settingsJSON = `{
         "hooks": [
           {
             "type": "command",
-            "command": "gitlet hook claude-code user-prompt-submit"
+            "command": "command -v gitlet >/dev/null 2>&1 && gitlet hook claude-code user-prompt-submit || true"
           }
         ]
       }
@@ -55,7 +55,7 @@ const settingsJSON = `{
         "hooks": [
           {
             "type": "command",
-            "command": "gitlet hook claude-code post-tool-use"
+            "command": "command -v gitlet >/dev/null 2>&1 && gitlet hook claude-code post-tool-use || true"
           }
         ]
       }
@@ -139,7 +139,7 @@ func TestInstallBinary(t *testing.T) {
 	}
 	for _, c := range []struct{ rel, want string }{
 		{".mcp.json", `"command": "/opt/my tools/gitlet",`},
-		{".claude/settings.json", `"command": "'/opt/my tools/gitlet' hook claude-code post-tool-use"`},
+		{".claude/settings.json", `"command": "command -v '/opt/my tools/gitlet' >/dev/null 2>&1 && '/opt/my tools/gitlet' hook claude-code post-tool-use || true"`},
 		{".codex/config.toml", `command = "/opt/my tools/gitlet"`},
 		{"hooks/pre-push", `'/opt/my tools/gitlet' hook git pre-push "$@" || true`},
 	} {
@@ -262,7 +262,7 @@ func TestInstallMerge(t *testing.T) {
         "hooks": [
           {
             "type": "command",
-            "command": "gitlet hook claude-code post-tool-use"
+            "command": "command -v gitlet >/dev/null 2>&1 && gitlet hook claude-code post-tool-use || true"
           }
         ]
       }
@@ -272,7 +272,7 @@ func TestInstallMerge(t *testing.T) {
         "hooks": [
           {
             "type": "command",
-            "command": "gitlet hook claude-code session-start",
+            "command": "command -v gitlet >/dev/null 2>&1 && gitlet hook claude-code session-start || true",
             "timeout": 5
           }
         ]
@@ -293,7 +293,7 @@ func TestInstallMerge(t *testing.T) {
         "hooks": [
           {
             "type": "command",
-            "command": "gitlet hook claude-code user-prompt-submit"
+            "command": "command -v gitlet >/dev/null 2>&1 && gitlet hook claude-code user-prompt-submit || true"
           }
         ]
       }
@@ -481,6 +481,57 @@ func TestHookScriptNeverFails(t *testing.T) {
 			}
 			if stderr.String() != tt.stderr {
 				t.Errorf("stderr = %q, want %q", stderr.String(), tt.stderr)
+			}
+		})
+	}
+}
+
+// TestClaudeHooksNeverFail runs the Claude Code hook commands init writes
+// with sh, as Claude Code does: without gitlet on PATH, and with a failing
+// binary, each exits 0, and arguments reach gitlet. The settings file is
+// shared with teammates who may not have gitlet installed.
+func TestClaudeHooksNeverFail(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	dir := t.TempDir()
+	failing := filepath.Join(dir, "fake gitlet")
+	write(t, failing, "#!/bin/sh\necho \"args: $*\" >&2\nexit 3\n", 0o755)
+	tests := []struct {
+		name, bin, stderr string
+	}{
+		{"not on PATH", "", ""},
+		{"missing binary", filepath.Join(dir, "missing"), ""},
+		{"failing binary", failing, "args: hook claude-code "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if _, err := Install(context.Background(), Options{Root: root, Clients: []string{ClaudeCode}, Binary: tt.bin}); err != nil {
+				t.Fatal(err)
+			}
+			v, err := decodeJSON([]byte(read(t, filepath.Join(root, ".claude", "settings.json"))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			hooks := v.(*object).vals["hooks"].(*object)
+			for _, h := range claudeHooks {
+				group := hooks.vals[h.event].([]any)[0].(*object)
+				command := group.vals["hooks"].([]any)[0].(*object).vals["command"].(string)
+				cmd := exec.Command(sh, "-c", command)
+				cmd.Env = []string{"PATH=" + t.TempDir()}
+				var stdout, stderr bytes.Buffer
+				cmd.Stdout, cmd.Stderr = &stdout, &stderr
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("%s: %s: %v (%s)", h.event, command, err, stderr.String())
+				}
+				if want := tt.stderr; want != "" && stderr.String() != want+h.arg+"\n" || want == "" && stdout.Len()+stderr.Len() > 0 {
+					t.Errorf("%s: stdout %q, stderr %q", h.event, stdout.String(), stderr.String())
+				}
 			}
 		})
 	}

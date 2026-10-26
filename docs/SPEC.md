@@ -911,7 +911,11 @@ The skill (installed by `gitlet init`) and the MCP server instructions say:
 ### 14.2 Hooks
 
 - **Hooks never fail the host**: every error is swallowed, the exit code is 0,
-  nothing contacts the remote, and the ledger busy timeout is 1 s.
+  nothing contacts the remote, and the ledger busy timeout is 1 s. The hook
+  commands `init` writes, for git and for Claude Code, do nothing when the
+  gitlet binary is missing (`command -v gitlet >/dev/null 2>&1 && gitlet hook
+  ... || true`), since the files are shared with teammates who may not have
+  it.
 - **Claude Code**: `gitlet hook claude-code <event>` for `SessionStart`
   (a short status), `UserPromptSubmit` and `PostToolUse` (new notes only). It
   reads the event JSON from stdin, uses its `cwd`, and answers with
