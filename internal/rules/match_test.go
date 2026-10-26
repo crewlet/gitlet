@@ -197,6 +197,34 @@ func TestMatchOlderFootprint(t *testing.T) {
 	}
 }
 
+// Rust tells a module from a value: from version 3 a method call's receiver
+// no longer resolves, so a resolved path server::run() names the module's
+// item and is no variable named like the module. Go cannot tell.
+func TestMatchRustPathByVersion(t *testing.T) {
+	method := fn("rust", "src/server.rs", "Server.run", "pub fn run(&self)")
+	path := model.Ref{Name: "run", Qualifier: "server", Kind: model.RefCall, Lang: "rust", Path: "src/main.rs", Line: 2, Module: "src/server", Resolved: true}
+	goMethod := fn("go", "internal/store/store.go", "Store.Get", "func (*Store) Get(string) ([]byte, error)")
+	goCall := model.Ref{Name: "Get", Qualifier: "store", Kind: model.RefCall, Lang: "go", Path: "cmd/a.go", Line: 2, Module: "internal/store", Resolved: true}
+	tests := []struct {
+		name    string
+		ref     model.Ref
+		version int
+		sym     model.Symbol
+		match   bool
+	}{
+		{"rust receiver could still resolve like a path", path, containerVersion, method, true},
+		{"rust path names a module item", path, rustReceiverVersion, method, false},
+		{"go package named like a variable", goCall, rustReceiverVersion, goMethod, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if m, r := Match(tt.ref, tt.version, tt.sym, true); m != tt.match || r {
+				t.Fatalf("Match = (%t, %t), want (%t, false)", m, r, tt.match)
+			}
+		})
+	}
+}
+
 // Gitlets recorded containers before footprints recorded their version, so
 // a footprint without a version whose refs carry a container counts as
 // containerVersion, and only one with no container at all as older.

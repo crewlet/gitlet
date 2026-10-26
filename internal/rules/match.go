@@ -16,6 +16,12 @@ import (
 // they did then.
 const containerVersion = 2
 
+// rustReceiverVersion is the footprint.Version from which the receiver of a
+// Rust method call never resolves, even when a module has its name. A
+// resolved Rust ref through a module is then a path x::f(), which names an
+// item of that module, never a variable named like it.
+const rustReceiverVersion = 3
+
 // footprintVersion implements FootprintVersion. Gitlets recorded containers
 // before footprints recorded their version, so a footprint without one is
 // taken for older than containerVersion only when none of its refs has a
@@ -43,7 +49,8 @@ func footprintVersion(fp model.Footprint) int {
 // matches a member (method, field) by name only, when that name is unique,
 // and so does a ref through the symbol's own module that misses a type
 // member only for want of a container: its qualifier may be a variable
-// named like the module.
+// named like the module, except in a Rust ref from a footprint of
+// rustReceiverVersion or later.
 // In Go the symbol must be exported unless the ref is in its package. A
 // resolved ref that builds an instance of a class also matches the class's
 // constructor (constructed).
@@ -77,7 +84,9 @@ func matchRef(ref model.Ref, version int, sym model.Symbol, uniqueMethod bool) (
 		// A module holds no methods, so a qualifier that names the
 		// symbol's own module is most likely a variable named like it
 		// (store := store.New(); store.Get()): match as unresolved.
-		if ref.Qualifier != "" && moduleMatch(ref.Module, sym) {
+		// Rust tells the two apart since rustReceiverVersion.
+		rustPath := model.LangFamily(ref.Lang) == "rust" && version >= rustReceiverVersion
+		if ref.Qualifier != "" && moduleMatch(ref.Module, sym) && !rustPath {
 			return uniqueMethod, false
 		}
 		return false, false

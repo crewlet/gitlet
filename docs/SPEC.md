@@ -778,6 +778,9 @@ module holds no methods, a qualified ref through the module of a type
 member is most likely made on a variable named like the module, which Go,
 Python and JavaScript do not tell apart (`store := store.New();
 store.Get()`), so it matches that member as an unresolved ref would. A
+Rust path `q::name` does so only in a footprint older than version 3:
+Rust keeps values apart from modules, and from then on a method call's
+receiver no longer resolves, so such a path names an item of the module. A
 JavaScript named or default import used as a qualifier names a class when
 it is capitalized, and otherwise an exported object, whose members are
 taken for the module's own functions. The importer's name for a default
