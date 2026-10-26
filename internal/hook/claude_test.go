@@ -169,7 +169,7 @@ func TestNotesText(t *testing.T) {
 		{"nothing", nil, ""},
 		{"one", resolved("codex-ci-1a2b3c no longer changes parseConfig"), "resolved gitlet note: codex-ci-1a2b3c no longer changes parseConfig"},
 		{"title on one line", resolved("two\nlines"), "resolved gitlet note: two lines"},
-		{"title cleaned like render's", resolved("a \x1b[31mb‮"), "resolved gitlet note: a [31mb"},
+		{"title cleaned like render's", resolved("a\u2028\x1b[31mb\u202e"), "resolved gitlet note: a [31mb"},
 		{"capped", resolved("a", "b", "c", "d", "e"), "resolved gitlet note: a\nresolved gitlet note: b\nresolved gitlet note: c\nand 2 more resolved gitlet notes."},
 	}
 	for _, tt := range tests {
