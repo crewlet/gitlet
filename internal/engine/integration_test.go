@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/crewlet/gitlet/internal/api"
+	"github.com/crewlet/gitlet/internal/bus"
+	"github.com/crewlet/gitlet/internal/config"
 	"github.com/crewlet/gitlet/internal/footprint"
 	"github.com/crewlet/gitlet/internal/gitx"
 	"github.com/crewlet/gitlet/internal/model"
@@ -476,7 +478,9 @@ func TestStatusWhoWhy(t *testing.T) {
 		t.Fatalf("start: %s %q", r.Outcome, r.Summary)
 	}
 	item := r.Data.Item.ID
-	writeFile(t, f.a, "config.go", strings.Replace(configGo, "\treturn nil\n}", "\tif c.Strict && c.Path == \"\" {\n\t\treturn errStrict\n\t}\n\treturn nil\n}", 1))
+	changed := strings.Replace(configGo, "\treturn nil\n}", "\tif c.Strict && c.Path == \"\" {\n\t\treturn errStrict\n\t}\n\treturn nil\n}", 1)
+	changed = strings.Replace(changed, "Validate() error {", "Validate() (err error) {", 1)
+	writeFile(t, f.a, "config.go", changed)
 	runGit(t, f.a, "commit", "-q", "-am", "config: validate strict configs\n\nGitlet-Item: "+string(item)+"\nGitlet-Agent: "+string(ea.Agent().ID))
 
 	st, err := ea.Status(ctx, api.StatusInput{})
@@ -510,7 +514,7 @@ func TestStatusWhoWhy(t *testing.T) {
 	if why.Data.Subject != "config: validate strict configs" || why.Data.Commit == "" {
 		t.Errorf("why commit: %+v", why.Data)
 	}
-	// why on a symbol explains its last change.
+	// why on a symbol blames its first line.
 	why, err = ea.Why(ctx, api.WhyInput{Target: "Config.Validate"})
 	must(t, err)
 	if why.Outcome != api.OK || why.Data.Item != item {
@@ -631,5 +635,364 @@ func TestVerbRefreshBudget(t *testing.T) {
 	}
 	if r.OfflineSince != nil {
 		t.Errorf("a slow remote is not offline: %v", r.OfflineSince)
+	}
+}
+
+// testConfig is a configuration with a short lease and poll interval.
+func testConfig() *config.Config {
+	c := config.Defaults()
+	c.Remote, c.Main = "origin", "main"
+	c.Lease = time.Minute
+	c.PollInterval = 10 * time.Second
+	return &c
+}
+
+func hasNoteKind(notes []model.Note, kinds ...model.NoteKind) bool {
+	for _, n := range notes {
+		for _, k := range kinds {
+			if n.Kind == k {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func noteKinds(notes []model.Note) []string {
+	var out []string
+	for _, n := range notes {
+		out = append(out, string(n.Kind)+": "+n.Title)
+	}
+	return out
+}
+
+func TestTwoAgentsOnTheSameCodeGetNotes(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	eb := openEngine(t, Options{Dir: f.b, Now: clk.Now})
+
+	writeFile(t, f.a, "config.go", strings.Replace(configGo, "return &Config{Path: path}, nil", "return &Config{Path: path, Strict: true}, nil", 1))
+	writeFile(t, f.b, "config.go", strings.Replace(configGo, "return &Config{Path: path}, nil", "return &Config{Path: path + \".toml\"}, nil", 1))
+	ra, err := ea.Start(ctx, api.StartInput{Intent: "Add strict mode to config loading"})
+	must(t, err)
+	rb, err := eb.Start(ctx, api.StartInput{Intent: "Append the extension to config paths", Paths: []string{"config.go"}})
+	must(t, err)
+	if ra.Outcome != api.OK || rb.Outcome != api.OK {
+		t.Fatalf("start: %q / %q", ra.Summary, rb.Summary)
+	}
+	// b started after a, so it already sees a changing config.go.
+	if !hasEntry(rb.Data.Touching, ea.Agent().ID, "changes") {
+		t.Errorf("b's start shows nobody touching its paths: %+v", rb.Data.Touching)
+	}
+
+	clk.Advance(30 * time.Second)
+	must(t, ea.Tick(ctx))
+	must(t, eb.Tick(ctx))
+	clk.Advance(6 * time.Second)
+	st, err := ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	// Both edit Load's body, and merge-tree predicts the conflict.
+	conflict := false
+	for _, n := range st.Notes {
+		conflict = conflict || n.Kind == model.NotePredictedConflict ||
+			n.Kind == model.NoteBodyOverlap && strings.Contains(n.Title, "conflict")
+	}
+	if !hasNoteKind(st.Notes, model.NoteBodyOverlap) || !conflict {
+		t.Errorf("a's notes: %v", noteKinds(st.Notes))
+	}
+	if st.Open == 0 || st.Open != len(st.Notes) {
+		t.Errorf("open %d with %d notes listed", st.Open, len(st.Notes))
+	}
+	if len(st.Data.Items) != 1 || len(st.Data.Items[0].Overlaps) == 0 {
+		t.Errorf("a's item shows no overlap: %+v", st.Data.Items)
+	}
+	// A later result does not repeat the notes status showed.
+	who, err := ea.Who(ctx, api.WhoInput{Target: "config.go:Load"})
+	must(t, err)
+	if len(who.Notes) != 0 {
+		t.Errorf("notes repeated after status: %v", noteKinds(who.Notes))
+	}
+	// who lists the others, not the caller.
+	if !hasEntry(who.Data.Entries, eb.Agent().ID, "changes") || len(distinctAgents(who.Data.Entries)) != 1 {
+		t.Errorf("who config.go:Load: %+v", who.Data.Entries)
+	}
+}
+
+func TestBreakingChangeIsClaimedAutomatically(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	eb := openEngine(t, Options{Dir: f.b, Now: clk.Now})
+
+	// a changes Load's signature; b writes a new caller of Load.
+	writeFile(t, f.a, "config.go", strings.Replace(configGo, "func Load(path string) (*Config, error) {\n\treturn &Config{Path: path}, nil",
+		"func Load(path string, strict bool) (*Config, error) {\n\treturn &Config{Path: path, Strict: strict}, nil", 1))
+	writeFile(t, f.b, "default.go", mainGo+"\n// Strict loads the strict configuration.\nfunc Strict() (*Config, error) {\n\treturn Load(\"strict.toml\")\n}\n")
+	ra, err := ea.Start(ctx, api.StartInput{Intent: "Add a strict flag to Load"})
+	must(t, err)
+	rb, err := eb.Start(ctx, api.StartInput{Intent: "Add a strict default"})
+	must(t, err)
+	if ra.Outcome != api.OK || rb.Outcome != api.OK {
+		t.Fatalf("start: %q / %q", ra.Summary, rb.Summary)
+	}
+
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	clk.Advance(6 * time.Second)
+	st, err := ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	var claim *api.ClaimInfo
+	for i, c := range st.Data.Claims {
+		if c.Symbol == "config.go:Load" {
+			claim = &st.Data.Claims[i]
+		}
+	}
+	if claim == nil || !claim.Mine || !claim.Auto || claim.Owner != ea.Agent().ID {
+		t.Fatalf("a's claims: %+v (notes %v)", st.Data.Claims, noteKinds(st.Notes))
+	}
+	claimRef := func() string {
+		return runGit(t, f.remote, "for-each-ref", "--format=%(objectname)", bus.ClaimsPrefix)
+	}
+	before := claimRef()
+	if before == "" {
+		t.Error("no claim on the remote")
+	}
+
+	// b sees a owning Load.
+	clk.Advance(6 * time.Second)
+	who, err := eb.Who(ctx, api.WhoInput{Target: "config.go:Load"})
+	must(t, err)
+	if !hasEntry(who.Data.Entries, ea.Agent().ID, "owns") {
+		t.Errorf("who from b: %+v", who.Data.Entries)
+	}
+
+	// The claim is renewed while a is active, in a later tick.
+	clk.Advance(e2eLease(ea) / 2)
+	must(t, ea.Tick(ctx))
+	if after := claimRef(); after == before {
+		t.Error("the claim was not renewed")
+	}
+	clk.Advance(6 * time.Second)
+	st, err = ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	for _, c := range st.Data.Claims {
+		if c.Symbol == "config.go:Load" && (c.Lapsed || !c.Mine) {
+			t.Errorf("claim after renewal: %+v", c)
+		}
+	}
+}
+
+func e2eLease(e *Engine) time.Duration { return e.Config().Lease }
+
+func TestSignatureClashFallsBackToTheHolder(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	eb := openEngine(t, Options{Dir: f.b, Now: clk.Now})
+	writeFile(t, f.a, "config.go", strings.Replace(configGo, "func Load(path string) (*Config, error) {", "func Load(path string, strict bool) (*Config, error) {", 1))
+	writeFile(t, f.b, "config.go", strings.Replace(configGo, "func Load(path string) (*Config, error) {", "func Load(ctx context.Context, path string) (*Config, error) {", 1))
+	ra, err := ea.Start(ctx, api.StartInput{Intent: "Add a strict flag to Load"})
+	must(t, err)
+	rb, err := eb.Start(ctx, api.StartInput{Intent: "Pass a context to Load"})
+	must(t, err)
+	if ra.Outcome != api.OK || rb.Outcome != api.OK {
+		t.Fatalf("start: %q / %q", ra.Summary, rb.Summary)
+	}
+
+	// a ticks first and claims Load; b then sees the clash with a holder.
+	clk.Advance(time.Minute)
+	must(t, ea.Tick(ctx))
+	clk.Advance(time.Second)
+	must(t, eb.Tick(ctx))
+	clk.Advance(6 * time.Second)
+	st, err := eb.Status(ctx, api.StatusInput{})
+	must(t, err)
+	t.Logf("b's notes: %v", noteKinds(st.Notes))
+	var clash *model.Note
+	for i, n := range st.Notes {
+		if n.Kind == model.NoteSignatureClash {
+			clash = &st.Notes[i]
+		}
+	}
+	if clash == nil || clash.Thread == "" {
+		t.Fatalf("b has no signature clash note: %v", noteKinds(st.Notes))
+	}
+	eb.mu.Lock()
+	seen := eb.clashSeen(ctx)
+	eb.mu.Unlock()
+	if _, ok := seen[clash.Thread]; !ok {
+		t.Errorf("clash %s not recorded: %v", clash.Thread, seen)
+	}
+
+	// Nobody discusses: after the thread timeout the holder keeps it, and
+	// b records that it needs Load.
+	for range 12 {
+		clk.Advance(time.Minute)
+		must(t, ea.Tick(ctx))
+		must(t, eb.Tick(ctx))
+	}
+	clk.Advance(6 * time.Second)
+	st, err = eb.Status(ctx, api.StatusInput{})
+	must(t, err)
+	found := false
+	for _, n := range st.Data.Needs {
+		if n.Need.Name == "config.go:Load" {
+			found = true
+			if n.Owner != ea.Agent().ID {
+				t.Errorf("b's need on Load names owner %q", n.Owner)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("b recorded no need after the fallback: needs %+v, threads %+v, notes %v", st.Data.Needs, st.Data.Threads, noteKinds(st.Notes))
+	}
+}
+
+func TestIdlePeerLapses(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+
+	ea := openEngine(t, Options{Dir: f.a, Config: testConfig()})
+	eb := openEngine(t, Options{Dir: f.b, Config: testConfig(), Now: clk.Now})
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Rework config loading"})
+	must(t, err)
+	if r.Outcome != api.OK {
+		t.Fatalf("start: %q", r.Summary)
+	}
+
+	peerOf := func(e *Engine) (api.PeerInfo, bool) {
+		t.Helper()
+		st, err := e.Status(ctx, api.StatusInput{})
+		must(t, err)
+		for _, p := range st.Data.Others {
+			if p.Agent.ID == ea.Agent().ID {
+				return p, true
+			}
+		}
+		return api.PeerInfo{}, false
+	}
+	if p, ok := peerOf(eb); !ok || p.Lapsed {
+		t.Fatalf("b's first look at a: %+v (seen %v)", p, ok)
+	}
+	// b watches for longer than the lease while a stays silent.
+	for range 8 {
+		clk.Advance(13 * time.Second)
+		must(t, eb.Tick(ctx))
+	}
+	if p, _ := peerOf(eb); !p.Lapsed || p.IdleSince == nil {
+		t.Errorf("a has not lapsed after %v of silence: %+v", 8*13*time.Second, p)
+	}
+
+	// After a long gap (b slept), time nobody watched does not count.
+	clk.Advance(time.Hour)
+	if p, _ := peerOf(eb); p.Lapsed {
+		t.Errorf("a lapsed on time nobody watched: %+v", p)
+	}
+}
+
+func TestSubmittedItemLands(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+
+	clk := newClock()
+	ea := openEngine(t, Options{Dir: f.a, Now: clk.Now})
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Make Default use gitlet.json"})
+	must(t, err)
+	if r.Outcome != api.OK {
+		t.Fatalf("start: %q", r.Summary)
+	}
+	item, branch := r.Data.Item.ID, r.Data.Branch
+	writeFile(t, f.a, "default.go", strings.Replace(mainGo, "gitlet.toml", "gitlet.json", 1))
+	runGit(t, f.a, "commit", "-q", "-am", "default: use gitlet.json")
+	runGit(t, f.a, "push", "-q", "origin", branch)
+	head := runGit(t, f.a, "rev-parse", "HEAD")
+
+	// Mark the item submitted, as submit will.
+	ea.mu.Lock()
+	_, err = ea.mutateState(ctx, func(st *model.AgentState) error {
+		i := itemIndex(st.Items, item)
+		st.Items[i].Status, st.Items[i].Head = model.ItemSubmitted, head
+		return nil
+	})
+	ea.mu.Unlock()
+	must(t, err)
+
+	// Someone squash-merges the branch on the remote.
+	runGit(t, f.b, "fetch", "-q", "origin", branch)
+	runGit(t, f.b, "merge", "-q", "--squash", "FETCH_HEAD")
+	runGit(t, f.b, "commit", "-q", "-m", "Make Default use gitlet.json (#1)")
+	runGit(t, f.b, "push", "-q", "origin", "main")
+
+	clk.Advance(time.Minute) // the next poll is due
+	must(t, ea.Tick(ctx))
+	ea.mu.Lock()
+	_, it, _ := ea.findItem(item)
+	ea.mu.Unlock()
+	if it.Status != model.ItemLanded || it.ClosedAt == nil {
+		t.Fatalf("item after the merge: %s (closed %v)", it.Status, it.ClosedAt)
+	}
+
+	// With nothing open, Shutdown removes the agent's refs from the remote.
+	must(t, ea.Shutdown(ctx))
+	if refs := runGit(t, f.remote, "for-each-ref", "--format=%(refname)", bus.AgentsPrefix+string(ea.Agent().ID)+"/"); refs != "" {
+		t.Errorf("refs left after Shutdown:\n%s", refs)
+	}
+	if _, err := ea.Status(ctx, api.StatusInput{}); !errors.Is(err, errClosed) {
+		t.Errorf("verb after Shutdown: %v", err)
+	}
+}
+
+func TestShutdownKeepsOpenWork(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+
+	ea := openEngine(t, Options{Dir: f.a})
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Keep me around"})
+	must(t, err)
+	if r.Outcome != api.OK {
+		t.Fatalf("start: %q", r.Summary)
+	}
+	must(t, ea.Shutdown(ctx))
+	if refs := runGit(t, f.remote, "for-each-ref", "--format=%(refname)", bus.StateRef(ea.Agent().ID)); refs == "" {
+		t.Error("Shutdown deleted the state of an agent with an open item")
+	}
+}
+
+func TestOfflineEngineStaysLocal(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+
+	ea := openEngine(t, Options{Dir: f.a, Offline: true})
+	r, err := ea.Start(ctx, api.StartInput{Intent: "Work on a plane"})
+	must(t, err)
+	if r.Outcome != api.OK || !r.Data.NewBranch {
+		t.Fatalf("offline start: %s %q", r.Outcome, r.Summary)
+	}
+	must(t, ea.Tick(ctx))
+	st, err := ea.Status(ctx, api.StatusInput{})
+	must(t, err)
+	if len(st.Data.Items) != 1 || st.Data.Items[0].Item.Intent != "Work on a plane" {
+		t.Errorf("offline status: %+v", st.Data.Items)
+	}
+	if refs := runGit(t, f.remote, "for-each-ref", "--format=%(refname)", bus.Prefix); refs != "" {
+		t.Errorf("an offline engine wrote to the remote:\n%s", refs)
+	}
+	if refs := runGit(t, f.a, "for-each-ref", "--format=%(refname)", bus.StateRef(ea.Agent().ID)); refs == "" {
+		t.Error("an offline engine kept no local state")
 	}
 }

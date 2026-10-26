@@ -46,7 +46,7 @@ func (e *Engine) evaluate(ctx context.Context, budget time.Duration) (rules.View
 	if err := e.notes.SyncNotes(ctx, e.me.ID, notes, v.Now); err != nil {
 		return v, notes, fmt.Errorf("engine: sync notes: %w", err)
 	}
-	e.recordClashes(ctx, v, notes)
+	e.recordClashes(ctx, v)
 	return v, notes, nil
 }
 

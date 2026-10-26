@@ -440,17 +440,17 @@ func (e *Engine) clashSeen(ctx context.Context) map[string]time.Time {
 	return out
 }
 
-// recordClashes stores the first-seen time of new signature clashes and
-// forgets clashes gone for clashMemory.
-func (e *Engine) recordClashes(ctx context.Context, v rules.View, notes []model.Note) {
+// recordClashes stores when each signature thread of rules.Threads first
+// appeared, and forgets threads gone for clashMemory.
+func (e *Engine) recordClashes(ctx context.Context, v rules.View) {
 	seen := make(map[string]time.Time, len(v.ClashSeen))
 	for k, t := range v.ClashSeen {
 		seen[k] = t
 	}
 	current := map[string]bool{}
-	for _, n := range notes {
-		if n.Kind == model.NoteSignatureClash && n.Thread != "" {
-			current[n.Thread] = true
+	for _, t := range rules.Threads(v) {
+		if t.Kind == model.ThreadSignature {
+			current[t.ID] = true
 		}
 	}
 	changed := false
