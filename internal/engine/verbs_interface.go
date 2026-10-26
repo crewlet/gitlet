@@ -1007,6 +1007,21 @@ func (e *Engine) doUse(ctx context.Context, in api.UseInput) (*api.Reply[api.Use
 			[]string{"use cherry-picks the stub onto your branch, so the files it touches must have no uncommitted changes"},
 			cmdOption("commit them, then call use again", "git add -- "+strings.Join(quoted, " ")+" && git commit")), none), nil
 	}
+	staged, err := e.stagedPaths(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(staged) > 0 {
+		quoted := make([]string, len(staged))
+		for i, p := range staged {
+			quoted[i] = shellQuote(p)
+		}
+		return reply(refused(fmt.Sprintf("Cannot use %s: you have staged changes to %s.", ref, joinCapped(staged, maxDetailNames)),
+			[]string{"git cherry-picks the stub only onto an index that matches HEAD, whatever files are staged"},
+			cmdOption("commit them", `git commit -m "..."`),
+			cmdOption("or unstage them, keeping the changes in your work tree", "git restore --staged -- "+strings.Join(quoted, " ")),
+			toolOption("then call use again", "use", "symbol", ref, "note", in.Note)), none), nil
+	}
 	before, err := e.repo.RevParse(ctx, "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("engine: use: %w", err)
@@ -1135,6 +1150,26 @@ func (e *Engine) dirtyPaths(ctx context.Context, paths []string) ([]string, erro
 	return compactStrings(out), nil
 }
 
+// stagedPaths returns the files whose staged version differs from HEAD,
+// sorted.
+func (e *Engine) stagedPaths(ctx context.Context) ([]string, error) {
+	entries, err := e.bg.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("engine: %w", err)
+	}
+	var out []string
+	for _, s := range entries {
+		if !s.Untracked && s.XY != "" && s.XY[0] != '.' {
+			out = append(out, s.Path)
+			if s.OrigPath != "" {
+				out = append(out, s.OrigPath)
+			}
+		}
+	}
+	sort.Strings(out)
+	return compactStrings(out), nil
+}
+
 // hasStubContent reports whether HEAD already has the stub's version of
 // every file the stub changes, so that there is nothing to pick.
 func (e *Engine) hasStubContent(ctx context.Context, stub string, files []string) bool {
@@ -1165,14 +1200,21 @@ func (e *Engine) undoRevert(ctx context.Context, before string) []string {
 }
 
 // applyFailure turns a cherry-pick or revert error into a refusal when
-// another git operation is in the way, and wraps any other error.
+// another git operation is in the way or git itself refused (gitx stops
+// and aborts what git started), and wraps any other error.
 func applyFailure(verb, ref string, err error) (*api.Result, error) {
+	var gerr *gitx.Error
 	switch {
 	case err == nil:
 		return nil, nil
 	case errors.Is(err, gitx.ErrBusy):
 		r := refused(fmt.Sprintf("Cannot %s %s: another git operation is in progress in this worktree.", verb, ref), nil,
 			cmdOption("finish or abort it first", "git status"))
+		return &r, nil
+	case errors.As(err, &gerr):
+		r := refused(fmt.Sprintf("Cannot %s %s: %s.", verb, ref, gitReason(gerr.Stderr)), nil,
+			cmdOption("see what is in the way", "git status"),
+			toolOption("then call "+verb+" again", verb, "symbol", ref))
 		return &r, nil
 	}
 	return nil, fmt.Errorf("engine: %s %s: %w", verb, ref, err)

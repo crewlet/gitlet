@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -903,6 +904,60 @@ func TestIfcUsePicksAndPinsTheStub(t *testing.T) {
 	}
 	if ob := ifcRemoteOutbox(t, p.f, p.b.Agent().ID); len(ob.Needs) != 1 || ob.Needs[0].PinnedSigHash != pub2.Data.Contract.SigHash || ob.Needs[0].PinnedCommit != drift.Data.Commit {
 		t.Errorf("b's needs after the drift: %+v", ob.Needs)
+	}
+}
+
+func TestIfcUseRefusesStagedChanges(t *testing.T) {
+	p := newIfcPair(t, nil)
+	ctx := ctxT(t)
+	writeFile(t, p.f.a, "config.go", ifcConfig(ifcLoadStrFn))
+	ifcStart(t, p.a, "Add a strict flag to Load")
+	if pub, err := p.a.Publish(ctx, api.PublishInput{Symbol: ifcLoad}); err != nil || pub.Outcome != api.OK {
+		t.Fatalf("publish: %v %+v", err, pub)
+	}
+	p.fresh()
+	ifcStart(t, p.b, "Load strict configs")
+	before := runGit(t, p.f.b, "rev-parse", "HEAD")
+
+	// A staged change to a file the stub does not touch still stops git
+	// cherry-pick, which needs an index that matches HEAD.
+	writeFile(t, p.f.b, "README.md", "# demo\n\nStrict configs.\n")
+	runGit(t, p.f.b, "add", "README.md")
+	r, err := p.b.Use(ctx, api.UseInput{Symbol: ifcLoad})
+	must(t, err)
+	ifcRefused(t, "use with staged changes", r.Result)
+	if !strings.Contains(r.Summary, "README.md") {
+		t.Errorf("summary does not name the staged file: %q", r.Summary)
+	}
+	var unstage string
+	for _, o := range r.Options {
+		if strings.HasPrefix(o.Command, "git restore --staged") {
+			unstage = o.Command
+		}
+	}
+	if unstage == "" {
+		t.Fatalf("no way to unstage: %+v", r.Options)
+	}
+	if o, ok := ifcOption(r.Result, "use"); !ok || o.Args["symbol"] != ifcLoad {
+		t.Errorf("no use option: %+v", r.Options)
+	}
+	if after := runGit(t, p.f.b, "rev-parse", "HEAD"); after != before {
+		t.Errorf("HEAD moved from %s to %s", before, after)
+	}
+
+	// The unstage option works as given, and use then goes through.
+	cmd := exec.Command("sh", "-c", unstage)
+	cmd.Dir = p.f.b
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%s: %v\n%s", unstage, err, out)
+	}
+	r, err = p.b.Use(ctx, api.UseInput{Symbol: ifcLoad})
+	must(t, err)
+	if r.Outcome != api.OK {
+		t.Fatalf("use after unstaging: %s %q %v", r.Outcome, r.Summary, r.Details)
+	}
+	if st := runGit(t, p.f.b, "status", "--porcelain"); st != "M README.md" {
+		t.Errorf("work tree after use: %q", st)
 	}
 }
 

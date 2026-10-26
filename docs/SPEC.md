@@ -810,8 +810,10 @@ Predicted conflicts run only for pairs whose changed files intersect, at most
   contract (`pinnedSigHash`, `pinnedStub`, and `pinnedCommit` for the picked
   commit). It creates the need if missing.
 - Refused when files the stub touches have uncommitted changes, with the
-  instruction to commit first. A conflicting cherry-pick is aborted and
-  reported by file.
+  instruction to commit first, and when any file is staged, since git
+  cherry-picks only onto an index that matches HEAD, with the instructions to
+  commit or unstage. A conflicting cherry-pick is aborted and reported by
+  file.
 - After a `drift`, `use` reverts the previously picked commit and picks the
   new stub.
 

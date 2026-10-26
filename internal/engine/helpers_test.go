@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/gitlet/internal/api"
+	"github.com/crewlet/gitlet/internal/gitx"
 	"github.com/crewlet/gitlet/internal/model"
 )
 
@@ -723,6 +725,28 @@ func TestRefusedAlwaysHasAnOption(t *testing.T) {
 	r = refused("No.", []string{"why"}, cmdOption("do this", "git status"))
 	if len(r.Options) != 1 || r.Options[0].Command != "git status" {
 		t.Errorf("refused with an option: %+v", r)
+	}
+}
+
+func TestApplyFailure(t *testing.T) {
+	if r, err := applyFailure("use", "a.go:F", nil); r != nil || err != nil {
+		t.Errorf("no error: %+v, %v", r, err)
+	}
+	if r, err := applyFailure("use", "a.go:F", fmt.Errorf("gitx: cherry-pick: rebase in progress: %w", gitx.ErrBusy)); err != nil || r == nil || r.Outcome != api.Refused {
+		t.Errorf("busy: %+v, %v", r, err)
+	}
+	// git refusing to start is a refusal with git's reason, not a failure.
+	gerr := &gitx.Error{Args: []string{"cherry-pick", "-x", "abc"}, ExitCode: 128,
+		Stderr: "error: your local changes would be overwritten by cherry-pick.\nhint: commit your changes or stash them to proceed.\nfatal: cherry-pick failed\n"}
+	r, err := applyFailure("use", "a.go:F", gerr)
+	if err != nil || r == nil || r.Outcome != api.Refused || r.Summary != "Cannot use a.go:F: your local changes would be overwritten by cherry-pick." {
+		t.Fatalf("git refused: %+v, %v", r, err)
+	}
+	if len(r.Options) != 2 || r.Options[1].Tool != "use" || r.Options[1].Args["symbol"] != "a.go:F" {
+		t.Errorf("options %+v", r.Options)
+	}
+	if _, err := applyFailure("use", "a.go:F", errors.New("disk full")); err == nil {
+		t.Error("another error is not a refusal")
 	}
 }
 
