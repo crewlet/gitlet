@@ -131,6 +131,7 @@ type SymbolChange struct {
 	OldSignature string     `json:"oldSignature,omitempty"`
 	OldSigHash   string     `json:"oldSigHash,omitempty"`
 	OldPath      string     `json:"oldPath,omitempty"` // moved
+	OldLang      string     `json:"oldLang,omitempty"` // moved to a file of another language (.js to .ts)
 	OldName      string     `json:"oldName,omitempty"` // renamed (old qualified name)
 	Symbol       Symbol     `json:"symbol"`
 }

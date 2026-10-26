@@ -185,6 +185,11 @@ func clashView(mine, theirs model.SymbolChange) *vb {
 
 func TestSignatureClash(t *testing.T) {
 	other := sigChange(cfg, "function parseConfig(string, Options): Config", true)
+	// src/util.js renamed to src/util.ts, adding types to parse: the change
+	// starts from the JavaScript symbol.
+	utilJS := fn("javascript", "src/util.js", "parse", "function parse(_)")
+	jsToTS := model.SymbolChange{Change: model.ChangeMoved, SigChanged: true, OldPath: utilJS.Path, OldLang: utilJS.Lang,
+		OldSignature: utilJS.Signature, OldSigHash: utilJS.SigHash, Symbol: fn("typescript", "src/util.ts", "parse", "function parse(string)")}
 	newSym := fn("go", "internal/x/x.go", "Strict", "func Strict() bool")
 	newSym2 := newSym
 	newSym2.Signature, newSym2.SigHash = "func Strict(int) bool", hashOf("func Strict(int) bool")
@@ -197,6 +202,7 @@ func TestSignatureClash(t *testing.T) {
 		{"both add, different signatures", clashView(addedChange(newSym), addedChange(newSym2)).v, model.SeverityAct},
 		{"both add, same signature", clashView(addedChange(newSym), addedChange(newSym)).v, ""},
 		{"compatible changes clash too", clashView(cfgCompat, other).v, model.SeverityAct},
+		{"moved to TypeScript while they change the JavaScript", clashView(jsToTS, sigChange(utilJS, "function parse(_, _)", true)).v, model.SeverityAct},
 		{"body against signature is body_overlap", clashView(bodyChange(cfg), other).v, ""},
 		{"I need it: I deferred", clashView(cfgBreaking, other).need(me, model.Need{Key: cfg.Key, Item: myItem}).v, ""},
 		{"they need it: they deferred", clashView(cfgBreaking, other).need(bob, model.Need{Key: cfg.Key, Item: bobItem}).v, ""},

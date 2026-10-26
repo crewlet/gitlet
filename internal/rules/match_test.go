@@ -93,6 +93,13 @@ func TestBaseKeyAndOldSymbol(t *testing.T) {
 	if baseKey(mv) != s.Key || oldSymbol(mv).Path != "a/b.go" {
 		t.Fatalf("moved: key %s, old path %s", baseKey(mv), oldSymbol(mv).Path)
 	}
+	js := fn("javascript", "src/util.js", "parse", "function parse(_)")
+	toTS := movedChange(js, "src/util.ts", false)
+	toTS.Symbol = fn("typescript", "src/util.ts", "parse", "function parse(string)")
+	toTS.OldLang = "javascript"
+	if old := oldSymbol(toTS); baseKey(toTS) != js.Key || old.Key != js.Key || old.Lang != "javascript" || old.Path != "src/util.js" {
+		t.Fatalf("moved from JavaScript to TypeScript: base key %s, old symbol %+v, want key %s", baseKey(toTS), old, js.Key)
+	}
 	m := fn("rust", "src/a.rs", "Shape.area@Area", "fn area(&self) -> f64")
 	if m.Name != "area" || m.Container != "Shape" {
 		t.Fatalf("unique-name suffix not dropped: %+v", m)

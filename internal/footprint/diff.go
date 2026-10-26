@@ -112,7 +112,8 @@ func removedChange(o model.Symbol) model.SymbolChange {
 
 // movedChange describes a symbol that kept its qualified name in a renamed
 // file. It breaks callers when its module changes or its signature changes
-// in a breaking way.
+// in a breaking way. A rename that changes the language (.js to .ts) records
+// the old one, since the old symbol's key was made with it.
 func movedChange(o, n model.Symbol) model.SymbolChange {
 	c := model.SymbolChange{
 		Change:      model.ChangeMoved,
@@ -120,6 +121,9 @@ func movedChange(o, n model.Symbol) model.SymbolChange {
 		BodyChanged: o.BodyHash != n.BodyHash,
 		OldPath:     o.Path,
 		Symbol:      n,
+	}
+	if o.Lang != n.Lang {
+		c.OldLang = o.Lang
 	}
 	if c.SigChanged {
 		c.OldSignature, c.OldSigHash = o.Signature, o.SigHash

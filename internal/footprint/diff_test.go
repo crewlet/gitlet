@@ -184,7 +184,15 @@ func TestDiffMovedFields(t *testing.T) {
 	}
 
 	same := DiffMoved(fileOfDefs("a.py", fn("f", "def f()", "f", 1)), fileOfDefs("b.py", fn("f", "def f()", "f", 1)))
-	if len(same) != 1 || same[0].OldSignature != "" || same[0].OldSigHash != "" || !same[0].Breaking {
+	if len(same) != 1 || same[0].OldSignature != "" || same[0].OldSigHash != "" || !same[0].Breaking || same[0].OldLang != "" {
 		t.Errorf("moved across modules = %+v", same)
+	}
+
+	// The old key was made with the old language, so a move that changes it
+	// says what it was.
+	toTS := DiffMoved(fileOfDefs("src/util.js", fn("parse", "function parse(_)", "p", 1, model.Param{})),
+		fileOfDefs("src/util.ts", fn("parse", "function parse(string)", "p", 1, model.Param{Type: "string"})))
+	if len(toTS) != 1 || toTS[0].OldLang != "javascript" || toTS[0].Symbol.Lang != "typescript" {
+		t.Errorf("moved from JavaScript to TypeScript = %+v", toTS)
 	}
 }

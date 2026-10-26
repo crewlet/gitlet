@@ -26,14 +26,23 @@ func baseKey(c model.SymbolChange) string {
 	case c.Change == model.ChangeRenamed && c.OldName != "" && s.Path != "":
 		return model.SymbolKey(s.Lang, s.Path, c.OldName)
 	case c.Change == model.ChangeMoved && c.OldPath != "" && s.Qualified != "":
-		return model.SymbolKey(s.Lang, c.OldPath, s.Qualified)
+		return model.SymbolKey(movedFrom(c), c.OldPath, s.Qualified)
 	}
 	return keyOf(s)
 }
 
+// movedFrom returns the language a moved symbol had at the base: a rename
+// from .js to .ts changes it.
+func movedFrom(c model.SymbolChange) string {
+	if c.OldLang != "" {
+		return c.OldLang
+	}
+	return c.Symbol.Lang
+}
+
 // oldSymbol returns the symbol as it was at the base, which is what other
-// code refers to: the old name of a renamed symbol, the old path of a moved
-// one, and the old signature when known.
+// code refers to: the old name of a renamed symbol, the old path and
+// language of a moved one, and the old signature when known.
 func oldSymbol(c model.SymbolChange) model.Symbol {
 	s := c.Symbol
 	switch c.Change {
@@ -44,7 +53,7 @@ func oldSymbol(c model.SymbolChange) model.Symbol {
 		}
 	case model.ChangeMoved:
 		if c.OldPath != "" {
-			s.Path = c.OldPath
+			s.Path, s.Lang = c.OldPath, movedFrom(c)
 		}
 	}
 	if c.OldSignature != "" {
