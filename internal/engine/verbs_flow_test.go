@@ -363,7 +363,7 @@ func TestFlowProposalOf(t *testing.T) {
 		{three, "them", ""},
 		{three, "test-cccc3333", "test-cccc3333"},
 	} {
-		p, refusal := e.proposalOf(c.t, api.ProposalInput{Owner: c.owner, Summary: "one owner"})
+		p, refusal := e.proposalOf(c.t, c.t.ID, api.ProposalInput{Owner: c.owner, Summary: "one owner"})
 		switch {
 		case c.want == "" && refusal == nil:
 			t.Errorf("owner %q among %d: accepted as %q", c.owner, len(c.t.Participants), p.Owner)
@@ -375,7 +375,7 @@ func TestFlowProposalOf(t *testing.T) {
 			t.Errorf("owner %q: proposal %+v, want owner %s", c.owner, p, c.want)
 		}
 	}
-	if _, refusal := e.proposalOf(two, api.ProposalInput{Owner: "me"}); refusal == nil {
+	if _, refusal := e.proposalOf(two, two.ID, api.ProposalInput{Owner: "me"}); refusal == nil {
 		t.Error("a proposal without a summary was accepted")
 	}
 }
@@ -534,6 +534,82 @@ func TestFlowDiscussRefusals(t *testing.T) {
 		if pr := r.Data.Message.Proposal; pr == nil || pr.Owner != c.want {
 			t.Errorf("owner %q: proposal %+v", c.owner, pr)
 		}
+	}
+}
+
+func TestFlowDiscussProposalRefusalsCanBeCopied(t *testing.T) {
+	requireDeps(t)
+	f := newFixture(t)
+	ctx := ctxT(t)
+	clk := newClock()
+	p := flowOverlap(t, ctx, f, clk)
+	const sig = "func Load(path string, strict bool) (*Config, error)"
+
+	// copyOption makes the call an option names, writing text where it
+	// shows the "..." placeholder, as an agent does.
+	copyOption := func(o model.Option) api.DiscussInput {
+		t.Helper()
+		in := api.DiscussInput{Message: "Here is my proposal."}
+		in.About, _ = o.Args["about"].(string)
+		if m, _ := o.Args["message"].(string); m != "" {
+			in.Message = m
+		}
+		pr, ok := o.Args["proposal"].(map[string]any)
+		if !ok {
+			t.Fatalf("option %+v has no proposal", o)
+		}
+		in.Proposal = &api.ProposalInput{}
+		for k, v := range pr {
+			s, _ := v.(string)
+			if s == "..." {
+				s = "one of us changes Load"
+			}
+			switch k {
+			case "owner":
+				in.Proposal.Owner = s
+			case "summary":
+				in.Proposal.Summary = s
+			case "signature":
+				in.Proposal.Signature = s
+			default:
+				t.Fatalf("option %+v: unknown proposal field %q", o, k)
+			}
+		}
+		return in
+	}
+	for _, c := range []struct {
+		name string
+		pr   api.ProposalInput
+	}{
+		{"owner outside the thread", api.ProposalInput{Owner: "test-ffff0000", Signature: sig, Summary: "I change Load"}},
+		{"no owner", api.ProposalInput{Signature: sig, Summary: "I change Load"}},
+		{"no summary", api.ProposalInput{Owner: "me", Signature: sig}},
+		{"long summary", api.ProposalInput{Owner: "me", Signature: sig, Summary: strings.Repeat("x", maxMessageLen+1)}},
+	} {
+		r, err := p.a.Discuss(ctx, api.DiscussInput{About: p.note.ID, Message: "hello", Proposal: &c.pr})
+		must(t, err)
+		flowWant(t, c.name, r.Result, api.Refused)
+		var copied []api.DiscussInput
+		for _, o := range r.Options {
+			if o.Tool == "discuss" {
+				copied = append(copied, copyOption(o))
+			}
+		}
+		if len(copied) == 0 {
+			t.Fatalf("%s: no discuss option: %+v", c.name, r.Options)
+		}
+		for _, in := range copied {
+			if in.Proposal.Signature != sig {
+				t.Errorf("%s: an option drops the signature: %+v", c.name, *in.Proposal)
+			}
+			if c.pr.Summary == "I change Load" && in.Proposal.Summary != c.pr.Summary {
+				t.Errorf("%s: an option drops the summary: %+v", c.name, *in.Proposal)
+			}
+		}
+		// The first option works as copied.
+		ok, err := p.a.Discuss(ctx, copied[0])
+		must(t, err)
+		flowWant(t, c.name+", the option copied", ok.Result, api.OK)
 	}
 }
 

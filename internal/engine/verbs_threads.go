@@ -64,14 +64,17 @@ func (e *Engine) doDiscuss(ctx context.Context, in api.DiscussInput) (*api.Reply
 		return reply(*refusal, none), nil
 	}
 	none.Thread = t
+	// Options repeat the agent's about: a note's thread has no id to name
+	// until its first message.
+	about := strings.TrimSpace(in.About)
 	text := strings.TrimSpace(in.Message)
 	switch n := utf8.RuneCountInString(text); {
 	case n == 0:
 		return reply(refused("discuss needs a message: say what you need or propose.", nil,
-			toolOption("say what you want to tell them", "discuss", "about", t.ID)), none), nil
+			toolOption("say what you want to tell them", "discuss", "about", about)), none), nil
 	case n > maxMessageLen:
 		return reply(refused(fmt.Sprintf("Your message has %d characters; keep it under %d.", n, maxMessageLen), nil,
-			toolOption("say it in fewer words", "discuss", "about", t.ID)), none), nil
+			toolOption("say it in fewer words", "discuss", "about", about)), none), nil
 	}
 	if e.readOnly() {
 		return reply(e.readOnlyRefusal("discuss"), none), nil
@@ -91,7 +94,7 @@ func (e *Engine) doDiscuss(ctx context.Context, in api.DiscussInput) (*api.Reply
 	}
 	var prop *model.Proposal
 	if in.Proposal != nil {
-		p, refusal := e.proposalOf(t, *in.Proposal)
+		p, refusal := e.proposalOf(t, about, *in.Proposal)
 		if refusal != nil {
 			return reply(*refusal, none), nil
 		}
@@ -264,7 +267,10 @@ func (e *Engine) myThreadItem(t model.ThreadState) model.ItemID {
 // proposalOf turns a proposal argument into a proposal with a fresh id and
 // a resolved owner: "me" is this agent, "them" the one other participant,
 // and an agent id must take part in the thread (docs/SPEC.md, section 4.1).
-func (e *Engine) proposalOf(t model.ThreadState, in api.ProposalInput) (model.Proposal, *api.Result) {
+// about is discuss's argument, for the options of a refusal: each proposes
+// again with the agent's summary and signature, or "..." in place of the
+// one that was missing or too long.
+func (e *Engine) proposalOf(t model.ThreadState, about string, in api.ProposalInput) (model.Proposal, *api.Result) {
 	agents := threadAgents(t)
 	var others []model.AgentID
 	for _, a := range agents {
@@ -272,11 +278,28 @@ func (e *Engine) proposalOf(t model.ThreadState, in api.ProposalInput) (model.Pr
 			others = append(others, a)
 		}
 	}
+	summary := strings.TrimSpace(in.Summary)
+	signature := strings.TrimSpace(in.Signature)
+	summaryOK := summary != "" && utf8.RuneCountInString(summary) <= maxMessageLen
+	signatureOK := utf8.RuneCountInString(signature) <= maxMessageLen
+	propose := func(label, owner string) model.Option {
+		pr := map[string]any{"owner": owner, "summary": "..."}
+		if summaryOK {
+			pr["summary"] = summary
+		}
+		switch {
+		case signature == "":
+		case signatureOK:
+			pr["signature"] = signature
+		default:
+			pr["signature"] = "..."
+		}
+		return toolOption(label, "discuss", "about", about, "proposal", pr)
+	}
 	ownerOptions := func() []model.Option {
-		opts := []model.Option{toolOption("propose that you own it", "discuss", "about", t.ID, "proposal", map[string]any{"owner": "me"})}
+		opts := []model.Option{propose("propose that you own it", "me")}
 		for _, a := range others {
-			opts = append(opts, toolOption("propose that "+string(a)+" owns it", "discuss", "about", t.ID,
-				"proposal", map[string]any{"owner": string(a)}))
+			opts = append(opts, propose("propose that "+string(a)+" owns it", string(a)))
 		}
 		return opts
 	}
@@ -303,14 +326,11 @@ func (e *Engine) proposalOf(t model.ThreadState, in api.ProposalInput) (model.Pr
 			return model.Proposal{}, &r
 		}
 	}
-	summary := strings.TrimSpace(in.Summary)
-	signature := strings.TrimSpace(in.Signature)
-	again := toolOption("propose again", "discuss", "about", t.ID, "proposal", map[string]any{"owner": owner})
-	switch {
+	switch again := propose("propose again", owner); {
 	case summary == "":
 		r := refused("A proposal needs a one-sentence summary.", nil, again)
 		return model.Proposal{}, &r
-	case utf8.RuneCountInString(summary) > maxMessageLen || utf8.RuneCountInString(signature) > maxMessageLen:
+	case !summaryOK || !signatureOK:
 		r := refused(fmt.Sprintf("Keep the proposal's summary and signature under %d characters each.", maxMessageLen), nil, again)
 		return model.Proposal{}, &r
 	}
