@@ -110,24 +110,29 @@ func mayBreak(sig map[string]bool, t *Task) bool {
 
 // Detection is how well a run's notes flagged the pairs that interact.
 type Detection struct {
-	Concurrent     int `json:"concurrentPairs"`     // pairs in flight at the same time
-	Interacting    int `json:"interactingPairs"`    // of those, pairs that conflict, break or duplicate
-	ConflictPairs  int `json:"conflictPairs"`       // ...that conflict
-	BreakPairs     int `json:"breakPairs"`          // ...that break the build
-	DupPairs       int `json:"dupPairs"`            // ...that duplicate
-	Flagged        int `json:"flaggedPairs"`        // concurrent pairs any note named
-	FlaggedWarn    int `json:"flaggedWarnPairs"`    // ...with a warn or act note
-	FlaggedAct     int `json:"flaggedActPairs"`     // ...with an act note
-	Hit            int `json:"hitPairs"`            // interacting pairs any note named
-	HitWarn        int `json:"hitWarnPairs"`        // ...with a warn or act note
-	HitAct         int `json:"hitActPairs"`         // ...with an act note
-	HitConflict    int `json:"hitConflictPairs"`    // conflicting pairs named by a warn or act note
-	HitBreak       int `json:"hitBreakPairs"`       // breaking pairs named by a warn or act note
-	HitDup         int `json:"hitDupPairs"`         // duplicate pairs named by a duplicate note
-	LeadRoundsSum  int `json:"leadRoundsSum"`       // rounds from the first warn or act note to the first landing, summed over warned hits
-	LeadRoundsHits int `json:"leadRoundsHits"`      // hits the sum covers
-	NotesOnQuiet   int `json:"notesOnQuietPairs"`   // notes naming a pair that does not interact
-	NotesOnTrouble int `json:"notesOnTroublePairs"` // notes naming a pair that does
+	Concurrent     int `json:"concurrentPairs"`       // pairs in flight at the same time
+	Interacting    int `json:"interactingPairs"`      // of those, pairs that conflict, break or duplicate
+	ConflictPairs  int `json:"conflictPairs"`         // ...that conflict
+	BreakPairs     int `json:"breakPairs"`            // ...that break the build
+	DupPairs       int `json:"dupPairs"`              // ...that duplicate
+	Flagged        int `json:"flaggedPairs"`          // concurrent pairs any note named
+	FlaggedWarn    int `json:"flaggedWarnPairs"`      // ...with a warn or act note
+	FlaggedAct     int `json:"flaggedActPairs"`       // ...with an act note
+	Hit            int `json:"hitPairs"`              // interacting pairs any note named
+	HitWarn        int `json:"hitWarnPairs"`          // ...with a warn or act note
+	HitAct         int `json:"hitActPairs"`           // ...with an act note
+	HitConflict    int `json:"hitConflictPairs"`      // conflicting pairs named by a warn or act note
+	HitBreak       int `json:"hitBreakPairs"`         // breaking pairs named by a warn or act note
+	InteractNoDup  int `json:"interactingNoDupPairs"` // interacting pairs that are not duplicates
+	HitWarnNoDup   int `json:"hitWarnNoDupPairs"`     // ...named by a warn or act note
+	HitDup         int `json:"hitDupPairs"`           // duplicate pairs named by a duplicate note
+	FlaggedDup     int `json:"flaggedDupPairs"`       // concurrent pairs any duplicate note named
+	FlaggedDupAct  int `json:"flaggedDupActPairs"`    // ...with an act-severity duplicate note
+	HitDupAct      int `json:"hitDupActPairs"`        // duplicate pairs named by an act-severity duplicate note
+	LeadRoundsSum  int `json:"leadRoundsSum"`         // rounds from the first warn or act note to the first landing, summed over warned hits
+	LeadRoundsHits int `json:"leadRoundsHits"`        // hits the sum covers
+	NotesOnQuiet   int `json:"notesOnQuietPairs"`     // notes naming a pair that does not interact
+	NotesOnTrouble int `json:"notesOnTroublePairs"`   // notes naming a pair that does
 }
 
 type pairKey [2]string
@@ -157,7 +162,7 @@ func Detect(runDir string, truths []PairTruth) (*Detection, error) {
 		switch {
 		case t.Landed > 0:
 			end = t.Landed
-		case t.Ended > 0:
+		case t.Outcome != "unfinished":
 			end = t.Ended
 		}
 		spans[t.ID] = span{t.Started, end}
@@ -170,7 +175,7 @@ func Detect(runDir string, truths []PairTruth) (*Detection, error) {
 	}
 	type flag struct {
 		sev, first, firstWarn, notes int
-		dup                          bool // a duplicate note named the pair
+		dup, dupAct                  bool // a duplicate note named the pair, an act-severity one
 	}
 	flags := map[pairKey]*flag{}
 	f, err := os.Open(filepath.Join(runDir, "events.jsonl"))
@@ -205,6 +210,7 @@ func Detect(runDir string, truths []PairTruth) (*Detection, error) {
 			fl.notes++
 			fl.sev = max(fl.sev, sevRank[ev.Severity])
 			fl.dup = fl.dup || ev.NoteKind == "duplicate"
+			fl.dupAct = fl.dupAct || ev.NoteKind == "duplicate" && ev.Severity == "act"
 			if sevRank[ev.Severity] >= 2 && fl.firstWarn < 0 {
 				fl.firstWarn = ev.Round
 			}
@@ -227,6 +233,9 @@ func Detect(runDir string, truths []PairTruth) (*Detection, error) {
 		in := p.Interacts()
 		if in {
 			d.Interacting++
+			if !p.Dup {
+				d.InteractNoDup++
+			}
 		}
 		if p.Conflict {
 			d.ConflictPairs++
@@ -257,6 +266,9 @@ func Detect(runDir string, truths []PairTruth) (*Detection, error) {
 				if p.Break {
 					d.HitBreak++
 				}
+				if !p.Dup {
+					d.HitWarnNoDup++
+				}
 				first := 0
 				for _, id := range []string{p.A, p.B} {
 					if l, ok := landed[id]; ok && (first == 0 || l < first) {
@@ -275,8 +287,17 @@ func Detect(runDir string, truths []PairTruth) (*Detection, error) {
 				d.HitAct++
 			}
 		}
-		if p.Dup && fl.dup {
-			d.HitDup++
+		if fl.dup {
+			d.FlaggedDup++
+			if p.Dup {
+				d.HitDup++
+			}
+		}
+		if fl.dupAct {
+			d.FlaggedDupAct++
+			if p.Dup {
+				d.HitDupAct++
+			}
 		}
 	}
 	return d, nil

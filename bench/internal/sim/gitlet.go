@@ -722,7 +722,7 @@ func (a *Agent) askWho(ctx context.Context, i int) bool {
 		return false
 	}
 	a.handleNotes(ctx, res.Notes)
-	if a.cur != tr || s.cfg.Overlap == "ignore" {
+	if a.cur != tr || s.cfg.Overlap != "defer" {
 		return false
 	}
 	var data struct {

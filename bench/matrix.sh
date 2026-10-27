@@ -32,6 +32,16 @@ list() {
 		echo "hot $seed 8 gitlet half"
 		echo "hot $seed 8 gitlet actdup"
 	done
+	# The same at 16 agents, where gitlet waits most: no deferral at all,
+	# and deferral on overlap notes but not on who.
+	for profile in hot clustered spread; do
+		for seed in 1 2 3; do
+			echo "$profile $seed 16 gitlet ignore"
+		done
+	done
+	for seed in 1 2 3; do
+		echo "hot $seed 16 gitlet notes"
+	done
 }
 
 one() { # one PROFILE SEED N MODE VARIANT
@@ -39,6 +49,7 @@ one() { # one PROFILE SEED N MODE VARIANT
 	extra=""
 	case $5 in
 	ignore) name="$name-ignore" extra="--overlap ignore" ;;
+	notes) name="$name-notes" extra="--overlap notes" ;;
 	half) name="$name-half" extra="--compliance 0.5" ;;
 	actdup) name="$name-actdup" extra="--dup-judge act" ;;
 	esac

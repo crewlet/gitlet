@@ -45,7 +45,7 @@ type Config struct {
 	RoundWall    time.Duration
 	CoordCost    float64 // rounds an agent spends on one coordination call
 	DupJudge     string  // gitlet: "oracle" judges every duplicate note rightly, "act" abandons on act notes only
-	Overlap      string  // gitlet: "defer" waits out overlapping edits of earlier tasks, "ignore" goes on
+	Overlap      string  // gitlet: "defer" waits out overlapping edits of earlier tasks, "notes" only those overlap notes name, "ignore" goes on
 	Gitlet       string
 	Keep         bool // keep the clones and CI checkout after the run
 	Work         string
@@ -103,6 +103,9 @@ func Run(ctx context.Context, env *gitenv.Env, fx *Fixture, tasks []*Task, cfg C
 	}
 	if cfg.CoordCost == 0 {
 		cfg.CoordCost = 0.25
+	}
+	if cfg.Overlap == "" {
+		cfg.Overlap = "defer"
 	}
 	if cfg.Mode == ModeGitlet && cfg.RoundWall == 0 {
 		cfg.RoundWall = 6 * time.Second
@@ -357,8 +360,9 @@ func (s *Sim) ci(ctx context.Context, tree string) (bool, []string, error) {
 
 // Build is the CI and local check during a run: build every library package
 // of the module. Cross-task breakage can only appear there, because tasks
-// add code only to library packages; each task alone passed go vet over the
-// whole module when it was generated, and the final main is vetted too.
+// add code only to library packages; each task alone passed the check it
+// was generated with (a build with --check build, as in the README, or go vet
+// over the whole module), and the final main is vetted too.
 func Build(ctx context.Context, env *gitenv.Env, dir string) (bool, []string, error) {
 	r, err := env.Run(ctx, dir, nil, "go", "list", "-e", "-f", "{{if and (ne .Name \"main\") .GoFiles}}{{.ImportPath}}{{end}}", "./...")
 	if err != nil {

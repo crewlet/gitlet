@@ -166,7 +166,7 @@ func (a *Agent) act(ctx context.Context) {
 		}
 		if s.cfg.Mode == ModeGitSync {
 			a.sync(ctx)
-			if a.busyUntil > s.round {
+			if a.state != stWorking || a.busyUntil > s.round {
 				return
 			}
 		}

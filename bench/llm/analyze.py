@@ -74,6 +74,8 @@ def agent_stats(path):
                 else:
                     errors += 1
             if gl:
+                # The whole output of a command that calls gitlet: chained
+                # commands (git commit && gitlet status) count in full.
                 gitlet_chars += len(t)
     return {
         "secs": round(max(stamps) - min(stamps), 1) if stamps else 0,
@@ -84,7 +86,7 @@ def agent_stats(path):
         "contextTokens": ctx_tok,
         "toolCalls": sum(tools.values()),
         "bash": tools.get("Bash", 0),
-        "gitletChars": gitlet_chars,
+        "gitletCmdChars": gitlet_chars,
         "conflictMarkers": conflicts,
         "rejectedPushes": rejected,
         "failedCommands": errors,
@@ -96,22 +98,24 @@ def gitlet_log(path):
     """Reads a run's gitlet wrapper log: calls by verb, refusals, seconds."""
     verbs, codes = collections.Counter(), collections.Counter()
     hooks = 0
-    secs, started = 0.0, None
+    secs, started = 0.0, []
     if not os.path.exists(path):
         return {"gitletCalls": 0, "gitletVerbs": {}, "gitletExit": {}, "gitletSecs": 0}
     for line in open(path):
         parts = line.rstrip("\n").split(" ")
         if len(parts) >= 3 and parts[1] == "start":
-            started = float(parts[0])
+            started.append(float(parts[0]))
             # `gitlet --help` and `gitlet VERB --help` are reading the help.
             verbs["help" if "--help" in parts[2:] else parts[2]] += 1
             if parts[2] == "hook":
                 hooks += 1
         elif len(parts) >= 4 and parts[1] == "exit":
             codes[parts[2]] += 1
-            if started is not None:
-                secs += float(parts[0]) - started
-                started = None
+            # Hooks run inside some calls; count the outermost call's time.
+            if started:
+                t0 = started.pop()
+                if not started:
+                    secs += float(parts[0]) - t0
     return {"gitletCalls": sum(verbs.values()) - hooks, "gitletHooks": hooks, "gitletVerbs": dict(verbs), "gitletExit": dict(codes), "gitletSecs": round(secs, 1)}
 
 

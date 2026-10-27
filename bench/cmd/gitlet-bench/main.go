@@ -199,7 +199,7 @@ func run(args []string) error {
 	fs.StringVar(&cfg.Gitlet, "gitlet", "", "gitlet binary")
 	fs.StringVar(&cfg.Name, "name", "", "run name (default mode-agents-seed)")
 	fs.StringVar(&cfg.DupJudge, "dup-judge", "oracle", "gitlet: oracle or act")
-	fs.StringVar(&cfg.Overlap, "overlap", "defer", "gitlet: defer or ignore overlap notes")
+	fs.StringVar(&cfg.Overlap, "overlap", "defer", "gitlet: defer on overlap notes and who, notes (defer on notes only) or ignore")
 	fs.BoolVar(&cfg.Keep, "keep", false, "keep the run's clones after it ends")
 	_ = fs.Parse(args)
 	env, err := c.env()

@@ -29,7 +29,9 @@ type Mix struct {
 }
 
 // DefaultMix is the op mix of the main experiment: mostly body edits and new
-// code, with one op in five a breaking signature change or a rename.
+// code, with one op drawn in five a breaking signature change or a rename.
+// A kind that does not fit its target becomes a body insert, so about one op
+// in ten ends up changing a signature.
 var DefaultMix = Mix{BodyInsert: 0.24, BodyWrap: 0.14, BodyLiteral: 0.10, AddFunc: 0.16, AddCall: 0.14, AddParam: 0.16, Rename: 0.06}
 
 // GenConfig controls the backlog.
