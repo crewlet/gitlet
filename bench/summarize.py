@@ -231,7 +231,7 @@ def main():
     variants = [r for r in runs if r["variant"]]
     if variants:
         print("\n## gitlet policy variants\n")
-        print("defer is the main policy: an op waits for an earlier task that a warn or act body_overlap or predicted_conflict note names, or that `who` lists as changing the function. notes waits on the notes but not on `who`. ignore never waits. half acts on each warn or act note with probability 0.5 (the `who` wait is unchanged). actdup abandons duplicates only on act-severity notes instead of judging every info duplicate note rightly. The last three columns split the op-rounds waited by what deferred the op.\n")
+        print("defer is the main policy: an op waits for an earlier task that a warn or act body_overlap or predicted_conflict note names, or that `who` lists as changing the function. notes waits on the notes but not on `who`. ignore waits on neither (a signature_clash still makes a task wait). half acts on each note it reads with probability 0.5 (the `who` wait is unchanged). actdup abandons duplicates only on act-severity notes instead of judging every info duplicate note rightly. The last three columns split the op-rounds waited by what deferred the op.\n")
         rows = []
         for n in sorted({r["agents"] for r in variants}):
             for p in PROFILES:

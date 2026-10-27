@@ -11,7 +11,9 @@ There are two parts, because neither answers the question alone.
 - **The simulation** (`gitlet-bench`) runs scripted agents on a real Go
   repository, with real git, the real gitlet binary and a merge bot that runs
   a real build. The agents do the same backlog in every mode, so the
-  difference between runs is the coordination alone. It can run many agents,
+  difference between modes on a backlog is the coordination, plus run-to-run
+  variation that this benchmark does not measure (gitlet runs depend on
+  wall-clock timing). It can run many agents,
   many seeds and many backlogs, but its agents act on gitlet's notes the way a
   script says, not the way a model reads them.
 - **The agent study** (`llm/`) puts two real Claude Code agents on one small
@@ -86,8 +88,12 @@ its branch as the new main plus every op it has done so far. A clean rebase
 that does not build (a caller of a function whose signature changed, say) is
 fixed the same way, which updates the calls. Each costs a round plus a round
 per 20 lines (the lines inside the conflict markers, or the lines the fix
-changed), and an agent gives up on a task after six build breaks. Resolution
-is always correct.
+changed). An agent gives up on a task at its seventh build break, or when
+the merge bot has sent its pull request back nine times. Resolution makes no
+mistakes of its own, but it only redoes the task's ops on the new main, so a
+break those ops still cause there (an initialization cycle that two tasks'
+new calls create, say) cannot be fixed: 8 tasks in the 132 runs, all on the
+hot backlog of seed 1 at 16 agents, ended stuck this way.
 
 ### Modes
 
@@ -95,7 +101,7 @@ is always correct.
 | --- | --- |
 | `git` | plain git: work on a branch, rebase only when submitting |
 | `gitsync` | plain git, rebasing onto main whenever it moves |
-| `filelock` | advisory file locks: before an op, wait until no earlier task in flight plans to touch its files |
+| `filelock` | advisory file locks: before an op, wait until no earlier task in flight plans to touch its files, then rebase onto main if main has changed those files |
 | `gitlet` | the real gitlet binary: `start` each task with its intent and the files it plans to touch (`--paths`, the same lists filelock locks on), `status` every round, act on notes, `submit` |
 
 The gitlet agents follow a scripted policy built on the skill. Every round
@@ -109,20 +115,29 @@ scripted agents never use.
 - Defer (the default `--overlap defer`): when a warn or act `body_overlap` or
   `predicted_conflict` note names an earlier task, or `who` lists an earlier
   task in flight as changing the function, the later task puts the op off
-  until the earlier one lands or stops, or is blocked on a contract, for at
-  most about 25 rounds, and does its other ops meanwhile. An agent with
-  nothing left to do waits; it does not take another task. `--overlap notes`
-  defers on the notes but not on `who`, and `--overlap ignore` never defers.
+  until the earlier one lands or stops, or is blocked on a contract, or 25
+  rounds pass, and does its other ops meanwhile. An op is picked up again
+  only when the agent gets to it, so 9 of 597 deferrals lasted 27 to 38
+  rounds. When a deferral ends, the agent first brings main in (`gitlet
+  update`) and then does the op. An agent with nothing left to do waits; it
+  does not take another task. `--overlap notes` defers on the notes but not
+  on `who`, and `--overlap ignore` defers on neither (a `signature_clash`
+  still makes a task wait, below).
 - `callee_changed`: `need` the symbol; `ready` and `drift`: `use` the stub,
   adapting its calls; `callers_affected`: `claim` and `publish` a stub;
   `needed`, `diverged`, `agreement`: `publish`; `message`: `accept`;
-  `still_waiting`: `release`. A finished task whose `submit` is refused
+  `still_waiting`: `release`; `broad` (a warn note that a peer with a broad
+  footprint gets in place of overlap notes): nothing, so overlaps with a
+  broad task are never deferred by notes. A finished task whose `submit` is
+  refused
   because a contract it used has not landed waits for it; after 30 rounds it
   releases its needs and rebuilds on main's signatures.
 - `signature_clash`: the later task takes its own change of the signature
   out, records a `need`, and redoes its change on top once the earlier task
-  lands. If the clash arrives after its ops are done, the change is dropped
-  (this happened once).
+  lands, under every `--overlap` policy. If the clash arrives after its ops
+  are done, the change is dropped; this happened three times, all on the hot
+  backlog of seed 1 at 16 agents (once with the default policy and twice with
+  `ignore`), and those tasks landed without their signature change.
 - `stale` and `new_callers`: bring main in and fix calls.
 - `duplicate`: the later task abandons itself on every act-severity duplicate
   note. On an info or warn one it abandons only when the other task really is
@@ -132,11 +147,14 @@ scripted agents never use.
 
 Every gitlet call but `status`, `start`, `update` and `submit` (which stand in
 for git commands the other modes run anyway) costs the agent a quarter of a
-round; reading notes costs nothing. A gitlet round takes at least six seconds
-of wall time, and gitlet's timeouts are scaled to that, so that its
-background snapshots and remote polling run as they would. With 8 and 16
-agents, rounds took 6 to 21 s because of builds and gitlet's own calls, so
-thread and publish timeouts lasted fewer rounds than intended at 16 agents.
+round; reading notes costs nothing, and gitlet's own call time costs no
+rounds (it only makes a round longer in wall time). A gitlet round takes at
+least six seconds of wall time. gitlet's thread and publish timeouts are cut
+by a factor of ten for it (60 s and 90 s), and snapshots run every second.
+Rounds lasted about 6 s at 4 agents, 8 to 12 s at 8 and 8 to 21 s at 16,
+because of builds and gitlet's own calls (about 2 s each at 8 agents and 2 to
+4.5 s at 16), so thread and publish timeouts lasted fewer rounds than
+intended at 8 and 16 agents, by amounts that depend on the machine's load.
 
 ### What is measured
 
@@ -158,7 +176,10 @@ Per run (`runs/NAME/result.json` and `events.jsonl`):
   (deferred or locked out); and rounds a finished task waited for a contract
   to land.
 - **main vet**: whether the final main passes `go vet ./...`, which also
-  compiles the tests.
+  compiles the tests. With `--check build` a task can break test compilation
+  and still be kept: on the hot backlog of seed 3 and the spread backlog of
+  seed 2, one add-parameter task also rewrote `testing.T.Run` calls in test
+  files, so main fails vet in every mode at 16 agents on those backlogs.
 - **gitlet's cost**: calls, notes read, note characters, seconds in gitlet.
 
 `gitlet-bench oracle` then judges the notes. It applies each task alone to
@@ -170,8 +191,11 @@ many interacting pairs a warn or act note named (recall), how many warned
 pairs really interact (precision), and how many rounds of warning there were
 before the first of the two landed. Ground truth is against the base, not the
 main each task really started from, so it misses interactions that only
-appear on a later main, including conflicts gitlet's own stubs cause; and as
-only builds run, it has no semantic interactions.
+appear on a later main, including conflicts gitlet's own stubs cause; as
+only builds run, it has no semantic interactions; and clean merges where
+neither task changes a signature are taken to build without building them,
+so it also misses breaks that new calls alone cause (the initialization
+cycle above is one).
 
 ### Running it
 
@@ -196,13 +220,13 @@ python3 summarize.py "$W" oracle-*.json
 `WORK="$W" ./matrix.sh list` prints the 132 runs: three profiles, three
 seeds, 4, 8 and 16 agents and four modes (108), plus gitlet policy variants
 (24). At 8 agents: `ignore` on the clustered and hot backlogs, and on the hot
-backlogs `half` (acts on each warn or act note with probability one half; the
-`who` deferral is unchanged) and `actdup`. At 16 agents: `ignore` on every
+backlogs `half` (acts on each note it reads, warn and act notes and info
+duplicate notes, with probability one half; the `who` deferral is unchanged)
+and `actdup`. At 16 agents: `ignore` on every
 profile and `notes` on the hot backlogs. On four CPUs, with up to three runs
 at a time, git and gitsync runs took 1 to 17 minutes, filelock runs 1 to 6
 and gitlet runs 5 to 30. Most of it is Go builds; for gitlet it is the
-six-second round at 4 and 8 agents and gitlet's own calls (about 4 s each)
-at 16 agents. Runs stop at 400 rounds. The oracle's ground truth for a
+six-second round at 4 agents and gitlet's own calls at 8 and 16 agents. Runs stop at 400 rounds. The oracle's ground truth for a
 64-task backlog covers runs of every size on it, and takes about ten
 minutes, as only the pairs that can break the build are built.
 
@@ -222,8 +246,9 @@ agents tasks that interact in a known way:
 `llm/run.sh setup DIR SCENARIO MODE` makes a bare remote and two clones. In
 gitlet mode it runs `gitlet init --client claude-code --git-hooks` in each
 clone and removes the client files, so that only the git hooks remain, and
-writes a wrapper that logs every call into `DIR/bin-a` and `DIR/bin-b`, which
-each agent's command prefix puts first on PATH.
+writes into `DIR/bin-a` and `DIR/bin-b` a `gitlet` wrapper that logs every
+call to `DIR/gitlet-a.log` and `DIR/gitlet-b.log`; each agent's command
+prefix puts its `bin` directory first on PATH.
 
 `llm/prompt.py` writes the prompt from `llm/prompts/`: the task; the rules
 (land on origin/main, build, vet and tests must pass on top of it, never
